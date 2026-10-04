@@ -155,3 +155,19 @@ async def test_summarize_and_fallback(indexed, fake_ollama):
     s = await indexed.rag.summarize("Não consigo acessar o ERP", [])
     assert s["generated"] is False and s["title"] == "Não consigo acessar o ERP"
 
+
+
+async def test_user_selected_article_is_answered_from_it(indexed, fake_ollama):
+    """Sugestão escolhida pelo usuário: responde do artigo mesmo com pergunta vaga,
+    mas só com o artigo escolhido e com a resposta fundamentada nele."""
+    from tests.conftest import vpn_answer
+    fake_ollama.responder = vpn_answer
+    vague = "estou com problemas de conexão"
+    r = await indexed.rag.chat(vague, [10, 20])
+    assert r.status == "no_evidence"
+    r = await indexed.rag.chat(vague, [10], opts=ChatOptions(selected=True))
+    assert r.status == "answered" and r.sources[0]["article_id"] == 10
+    assert "Configuração da VPN no notebook" in fake_ollama.calls[-1][1]["content"]
+    # selected com mais de um artigo não pula as travas
+    r = await indexed.rag.chat(vague, [10, 20], opts=ChatOptions(selected=True))
+    assert r.status == "no_evidence"

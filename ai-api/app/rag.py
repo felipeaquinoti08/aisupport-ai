@@ -31,6 +31,7 @@ class ChatOptions:
     temperature: float | None = None
     max_tokens: int | None = None
     model: str | None = None
+    selected: bool = False
 
 
 @dataclass
@@ -175,7 +176,8 @@ class RagService:
         query = self.retrieval_query(question, history)
         hits = await self.retrieve(query, self._s.rag_candidates, allowed_ids)
         t_retrieval = int((time.monotonic() - t0) * 1000)
-        decision = evaluate_evidence(question, hits, p, alt_question=query)
+        selected = bool(opts.selected) and len(allowed_ids) == 1
+        decision = evaluate_evidence(question, hits, p, alt_question=query, trusted=selected)
         considered = self._considered(hits)
 
         if not decision.ok:
@@ -190,7 +192,11 @@ class RagService:
         documents = [{"article_id": h.article_id, "title": h.title, "text": h.text} for h in decision.context]
         model = await self._resolve_model(opts.model)
         result = await self._ollama.chat(
-            build_chat_messages(question, documents),
+            build_chat_messages(
+                question if not selected or not documents
+                else f"{question}\n(O usuário indicou que o problema é sobre o assunto do documento \"{documents[0]['title']}\".)",
+                documents,
+            ),
             model=model,
             temperature=_clamp(opts.temperature, 0.0, 1.0, None),
             max_tokens=int(_clamp(opts.max_tokens, 64, 1024, self._s.llm_max_tokens)),

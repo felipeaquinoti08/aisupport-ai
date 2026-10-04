@@ -38,14 +38,26 @@ class EvidenceDecision:
     context: list[Hit] = field(default_factory=list)
 
 
-def evaluate_evidence(question: str, hits: list[Hit], p: RagParams, alt_question: str | None = None) -> EvidenceDecision:
+def evaluate_evidence(
+    question: str,
+    hits: list[Hit],
+    p: RagParams,
+    alt_question: str | None = None,
+    trusted: bool = False,
+) -> EvidenceDecision:
     """`alt_question`: the question enriched with the previous turn (follow-ups).
     Coverage uses the best of both, so neither the history dilutes a clear
-    question nor a short follow-up ("e no celular?") loses its context."""
-    if not tokens(question) and not (alt_question and tokens(alt_question)):
-        return EvidenceDecision(False, "empty_query", 0.0, 0.0)
+    question nor a short follow-up ("e no celular?") loses its context.
+
+    `trusted`: the user explicitly picked the (single) article among the
+    suggestions - relevance gates are skipped, its best passages are used."""
     if not hits:
         return EvidenceDecision(False, "no_documents", 0.0, 0.0)
+    if trusted:
+        context = sorted(hits, key=lambda h: h.dense_score, reverse=True)[: min(p.top_k, p.max_chunks_per_article)]
+        return EvidenceDecision(True, "selected", max(h.dense_score for h in hits), 1.0, context)
+    if not tokens(question) and not (alt_question and tokens(alt_question)):
+        return EvidenceDecision(False, "empty_query", 0.0, 0.0)
 
     top_score = max(h.dense_score for h in hits)
     if top_score < p.min_score:

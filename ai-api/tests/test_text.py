@@ -105,3 +105,15 @@ def test_answer_urls_are_repaired_or_rejected():
     # outro domínio -> resposta descartada
     r = validate_answer(ans("Instale o fortclient VPN baixando em https://download-fortclient.example.com/vpn"), [doc], p)
     assert not r.ok and r.reason == "external_url"
+
+
+def test_selected_article_skips_relevance_gates():
+    from app.guard import RagParams, evaluate_evidence
+    from app.vectorstore import Hit
+    hit = Hit("c1", 1, 0, "Configuração do fortigate", "Instale o fortclient VPN e use 203.0.113.10:10443", 0.495, {})
+    p = RagParams(min_score=0.55, min_term_coverage=0.25, min_answer_overlap=0.45, context_margin=0.08,
+                  top_k=3, max_chunks_per_article=2, max_context_chars=4500)
+    assert evaluate_evidence("estou com problemas de conectividade", [hit], p).reason == "low_score"
+    d = evaluate_evidence("estou com problemas de conectividade", [hit], p, trusted=True)
+    assert d.ok and d.reason == "selected" and d.context == [hit]
+    assert not evaluate_evidence("x", [], p, trusted=True).ok
