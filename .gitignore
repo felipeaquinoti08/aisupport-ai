@@ -1,0 +1,10 @@
+.DS_Store
+*.swp
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.env
+certs/*
+!certs/.gitkeep
+backups/
