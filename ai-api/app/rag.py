@@ -149,6 +149,7 @@ class RagService:
                     "title": h.title,
                     "score": round(h.dense_score, 4),
                     "url": h.payload.get("url", ""),
+                    "categories": list(h.payload.get("categories") or []),
                 }
         candidates = sorted(best.values(), key=lambda c: c["score"], reverse=True)
         return {"candidates": candidates, "timings": {"total_ms": int((time.monotonic() - t0) * 1000)}}
