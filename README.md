@@ -411,6 +411,7 @@ São 51 testes, com Qdrant em memória e substitutos determinísticos do Ollama 
 
 | Sintoma | Verificação |
 |---|---|
+| `pull access denied for ...-ai-api` (Komodo/Portainer) | Versão antiga do `docker-compose.yml`. A atual tem `pull_policy: build` na ai-api: o pull pula a imagem e o deploy a constrói. Faça pull do repositório e **Deploy** de novo |
 | `ai-api` não fica healthy | `docker compose logs ai-api`. Variável obrigatória faltando (`AI_API_KEY` < 32 caracteres, `GLPI_URL`) |
 | `model-puller` falha | Saída de Internet do host. Confira `docker compose --profile setup run --rm model-puller` |
 | `/api/health` com `llm.installed=false` | Rode o `model-puller`. Confira se o nome em `LLM_MODEL` é idêntico ao do `ollama list` |
