@@ -12,6 +12,7 @@ O plugin do GLPI fica em [aisupport-](https://github.com/felipeaquinoti08/aisupp
 - [Requisitos](#requisitos)
 - [Modelo e embeddings](#modelo-e-embeddings)
 - [Instalação](#instalação)
+- [Deploy no Komodo](#deploy-no-komodo)
 - [Configuração (.env)](#configuração-env)
 - [Conta da API do GLPI](#conta-da-api-do-glpi)
 - [Indexação da Base de Conhecimento](#indexação-da-base-de-conhecimento)
@@ -132,9 +133,89 @@ docker compose exec ai-api python -m app.indexer.full
 
 O Ollama **não é publicado**. Para consultar as tags dele, use `docker compose exec ollama ollama list`. A API do Ollama (`/api/tags`) só é acessível de dentro da rede interna, por exemplo com `docker compose exec ai-api python -c "import urllib.request;print(urllib.request.urlopen('http://ollama:11434/api/tags').read()[:200])"`.
 
-Para deploy por ferramenta de orquestração (Komodo, Portainer...), o `env_file` é opcional: as mesmas variáveis podem ser injetadas pelo ambiente.
+Para o Komodo (ou Portainer), veja [Deploy no Komodo](#deploy-no-komodo). Lá o download dos modelos também acontece pelo Docker, no próprio deploy.
 
 Depois disso, configure o plugin no GLPI (aba **Servidor de IA**) com a URL e a `AI_API_KEY`, e clique em **[Testar conexão]**.
+
+## Deploy no Komodo
+
+A pilha inteira roda em Docker, **inclusive o download do LLM**: com `COMPOSE_PROFILES=setup`, o serviço `model-puller` sobe junto em cada deploy, baixa os modelos que faltam (os que já existem são pulados) e encerra. Não é preciso abrir terminal no servidor.
+
+### 1. Servidor
+
+O servidor de IA (Oracle ARM64) precisa ter o **Komodo Periphery** conectado ao seu Komodo Core e o Docker instalado. Ele aparece em **Servers** como *Ok*.
+
+### 2. Variáveis secretas (recomendado)
+
+Em **Settings > Variables**, crie as variáveis abaixo marcadas como **secret**. Assim elas não aparecem na tela da stack nem nos logs.
+
+| Variável | Valor |
+|---|---|
+| `AISUPPORT_AI_API_KEY` | `openssl rand -hex 32` (a mesma vai no plugin do GLPI) |
+| `AISUPPORT_QDRANT_API_KEY` | `openssl rand -hex 32` |
+| `AISUPPORT_GLPI_CLIENT_SECRET` | segredo do cliente OAuth |
+| `AISUPPORT_GLPI_PASSWORD` | senha da conta de serviço |
+
+### 3. Stack
+
+**Stacks > New Stack** (ex.: `aisupport-ai`):
+
+| Campo | Valor |
+|---|---|
+| Server | o servidor de IA (ARM64) |
+| Source | Git Repo: `felipeaquinoti08/aisupport-ai`, branch `main` (repositório público; account só se ele virar privado) |
+| Compose file | `docker-compose.yml` (padrão) |
+| Run Build | **ligado**: constrói a imagem da ai-api no próprio servidor (ARM64) a cada deploy |
+| Auto Pull / Webhook | opcional, para redeploy ao dar push no `main` |
+
+Em **Environment**, cole o ambiente. O Komodo grava esse conteúdo como `.env` na pasta da stack e o Compose o usa, tanto na interpolação quanto no `env_file` da ai-api:
+
+```env
+COMPOSE_PROJECT_NAME=glpi-ai
+COMPOSE_PROFILES=setup
+
+# Exposição da ai-api: IP privado da VM (VCN) ou da VPN, alcançável pelo GLPI.
+# Restrinja a porta na Security List/NSG da Oracle e no firewall da VM.
+AI_API_BIND=10.0.0.10
+AI_API_PORT=8080
+AI_API_KEY=[[AISUPPORT_AI_API_KEY]]
+AI_API_ALLOWED_IPS=203.0.113.20/32
+
+QDRANT_API_KEY=[[AISUPPORT_QDRANT_API_KEY]]
+
+GLPI_URL=https://glpi.example.com
+GLPI_OAUTH_CLIENT_ID=<id do cliente OAuth>
+GLPI_OAUTH_CLIENT_SECRET=[[AISUPPORT_GLPI_CLIENT_SECRET]]
+GLPI_USERNAME=agente-n1
+GLPI_PASSWORD=[[AISUPPORT_GLPI_PASSWORD]]
+
+LLM_MODEL=qwen2.5:3b-instruct-q4_K_M
+EMBED_MODEL=qwen3-embedding:0.6b
+RAG_MIN_SCORE=0.55
+SYNC_INTERVAL_MINUTES=15
+```
+
+Os demais valores do [`.env.example`](.env.example) têm padrões e podem ficar de fora, como os limites de memória que somam 4 GiB. `AI_API_ALLOWED_IPS` deve conter o IP **de saída** do servidor do GLPI, do jeito que ele chega na VM de IA.
+
+### 4. Deploy e primeiro uso
+
+1. **Deploy.** No primeiro deploy, o `model-puller` baixa cerca de 2,5 GB de modelos. Acompanhe em **Logs > model-puller** até aparecer `Modelos disponíveis`. Em seguida ele fica *exited (0)*, o que é esperado.
+2. Confira em **Services** que `ollama`, `qdrant` e `ai-api` estão **healthy**.
+3. Uns 20 s depois de subir, a ai-api faz a primeira indexação da KB sozinha. Veja em **Logs > ai-api** o evento `index_full_done` (ou `index_failed`, com o motivo).
+4. No GLPI: **Administração > Assistente de IA > Configurações > Servidor de IA**, informe `http://10.0.0.10:8080` (ou o endereço da VPN) e a mesma `AI_API_KEY`. Salve e clique em **[Testar conexão]**.
+
+### Operação pelo Komodo
+
+| Tarefa | Como |
+|---|---|
+| Atualizar a pilha | **Deploy** (com Run Build, a ai-api é reconstruída). Para o Ollama/Qdrant, mude `OLLAMA_IMAGE` ou `QDRANT_IMAGE` no Environment |
+| Trocar ou adicionar modelo | Altere `LLM_MODEL` (ou `EXTRA_MODELS`) no Environment e faça **Deploy**. O `model-puller` baixa só o que falta |
+| Reindexar a KB | Botão **[Reindexar tudo]** no painel do GLPI, ou no terminal do servidor: `docker compose -p glpi-ai exec ai-api python -m app.indexer.full` |
+| Calibrar o threshold | Terminal do servidor: `docker compose -p glpi-ai exec -T ai-api python -m app.calibrate < perguntas.jsonl` |
+| Ver consumo | **Stats** da stack ou do servidor. O Ollama fica em ~3 GB com os dois modelos carregados |
+| Rodar 100% offline | Depois do primeiro download, deixe `COMPOSE_PROFILES` vazio. O `model-puller` não sobe mais e nada sai para a Internet |
+
+> **Dica:** o servidor de IA não precisa de Internet depois do primeiro deploy. Se o Komodo ou o Periphery ainda precisarem acessar o GitHub para o *pull* do repositório, isso não afeta o Ollama nem o Qdrant, que continuam na rede interna sem saída.
 
 ---
 
@@ -142,6 +223,7 @@ Depois disso, configure o plugin no GLPI (aba **Servidor de IA**) com a URL e a 
 
 | Variável | Padrão | Descrição |
 |---|---|---|
+| `COMPOSE_PROFILES` | vazio | `setup` = baixa os modelos que faltam a cada `up` (Komodo) |
 | `AI_API_BIND` / `AI_API_PORT` | 127.0.0.1 / 8080 | IP e porta onde a ai-api é publicada. Use o IP da VPN ou da rede privada alcançável pelo GLPI |
 | `AI_API_KEY` | — | Chave compartilhada com o plugin (mínimo de 32 caracteres) |
 | `AI_API_ALLOWED_IPS` | vazio | CIDRs autorizados (ex.: `10.0.0.5/32`). Vazio = qualquer origem com a chave |
