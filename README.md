@@ -88,6 +88,16 @@ docker compose version
 | Resposta completa (até 3 trechos) | 6–16 s; 25–30 s com o modelo frio | 8–20 s |
 | Geração | ~8 tokens/s | 10–15 tokens/s |
 
+**O que define a velocidade:** a leitura do artigo é quase instantânea (o prompt fixo fica em cache). O tempo vem da **escrita** da resposta, que depende dos **núcleos físicos** da CPU. Medido com um artigo real:
+
+| Hardware / ajuste | Escrita | Resposta típica |
+|---|---|---|
+| 2 núcleos físicos (4 vCPU HT) compartilhados com o GLPI | 7,5 tokens/s | 20–25 s |
+| Mesmo host com `LLM_NUM_THREAD=4` | 8,7 tokens/s | 18–20 s |
+| 4 núcleos físicos dedicados (ex.: Ampere A1 4 OCPU) | ~15 tokens/s (estimado) | 8–12 s |
+
+Modelos menores (1,5B) são 3x mais rápidos, mas **reprovaram** na bateria de qualidade: recusaram perguntas cobertas pela KB e responderam uma tentativa de prompt injection. Por isso o padrão continua no 3B.
+
 **Alternativas** (troque `LLM_MODEL` e rode o `model-puller` de novo):
 
 | Modelo | Quando usar |
@@ -216,6 +226,7 @@ LLM_TEMPERATURE=0.1
 LLM_MAX_TOKENS=512
 LLM_TIMEOUT=180
 OLLAMA_KEEP_ALIVE=-1
+LLM_NUM_THREAD=0
 
 # --- RAG (calibre RAG_MIN_SCORE com python -m app.calibrate) ------------------------------------
 RAG_MIN_SCORE=0.55
@@ -300,6 +311,7 @@ Os demais valores podem ficar como estão. Eles são os padrões testados para 4
 | `GLPI_TIMEZONE` | America/Sao_Paulo | Fuso das datas de validade dos artigos |
 | `LLM_MODEL` / `EMBED_MODEL` | qwen2.5:3b / qwen3-embedding:0.6b | Modelos |
 | `LLM_NUM_CTX` / `EMBED_NUM_CTX` | 4096 / 512 | Contexto (afeta a RAM) |
+| `LLM_NUM_THREAD` | 0 | Threads do modelo (0 = núcleos físicos). Com hyper-threading, use o total de vCPUs: ~15% mais rápido |
 | `LLM_TEMPERATURE` / `LLM_MAX_TOKENS` / `LLM_TIMEOUT` | 0.1 / 512 / 180 | Geração (com seed fixa: mesma pergunta = mesma resposta) |
 | `RAG_MIN_SCORE` | 0.55 | Score mínimo de relevância. **Calibre** |
 | `RAG_MIN_TERM_COVERAGE` | 0.25 | Fração mínima dos termos da pergunta presentes nos trechos |

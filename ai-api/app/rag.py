@@ -249,7 +249,7 @@ class RagService:
         ]
         fallback_title = question.splitlines()[0][:80] if question else "Solicitação via Agente N1"
         try:
-            result = await self._ollama.chat(build_summary_messages(question, transcript), max_tokens=400, temperature=0.0, json_output=True)
+            result = await self._ollama.chat(build_summary_messages(question, transcript), max_tokens=self._s.summary_max_tokens, temperature=0.0, json_output=True)
             data = json.loads(result.text)
             title = clean_input(str(data.get("titulo") or ""))[:80]
             summary = clean_input(str(data.get("resumo") or ""))[:600]

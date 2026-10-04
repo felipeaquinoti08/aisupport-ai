@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     llm_num_ctx: int = 4096
     llm_temperature: float = 0.1
     llm_seed: int = 42
+    # Threads de CPU do modelo (0 = automático: núcleos físicos). Em hosts com
+    # hyper-threading, usar todas as vCPUs costuma render ~15% a mais.
+    llm_num_thread: int = 0
+    summary_max_tokens: int = 200
     llm_max_tokens: int = 512
     llm_timeout: float = 180.0
     embed_num_ctx: int = 512
