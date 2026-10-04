@@ -84,6 +84,10 @@ services:
     <<: *hardening
     build:
       context: ./ai-api
+    # Imagem construída a partir deste repositório (não existe em registro):
+    # "docker compose pull" pula este serviço e "up" constrói no próprio
+    # servidor (ARM64 ou x86). Necessário para Komodo/Portainer, que fazem pull antes do up.
+    pull_policy: build
     image: ${COMPOSE_PROJECT_NAME:-glpi-ai}-ai-api:${AI_API_VERSION:-local}
     env_file:
       - path: .env
