@@ -125,6 +125,8 @@ class OllamaClient:
                 "repeat_penalty": 1.1,
             },
         }
+        if self._s.llm_num_thread > 0:
+            payload["options"]["num_thread"] = self._s.llm_num_thread
         if json_output:
             # dict = JSON schema (geração restrita por gramática); True = JSON livre
             payload["format"] = json_output if isinstance(json_output, dict) else "json"
