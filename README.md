@@ -42,6 +42,7 @@ servidor do GLPI ──HTTPS + Bearer AI_API_KEY──► ai-api :8080 ──┬
 | ai-api | `glpi_ai_net` + `glpi_ai_edge` | só para alcançar o GLPI | `AI_API_BIND:AI_API_PORT` | 320m |
 | model-puller | `glpi_ai_edge` | sim, só no download dos modelos | não | — |
 
+- As redes recebem o prefixo da stack (ex.: `aisupport-ai_glpi_ai_net`), então várias pilhas no mesmo host ficam isoladas entre si.
 - A rede `glpi_ai_net` é `internal: true`: o Ollama e o Qdrant **não conseguem acessar a Internet** e não ficam expostos. Além disso, `OLLAMA_NO_CLOUD=1` e a telemetria do Qdrant ficam desligadas.
 - Os modelos são baixados por um serviço separado e temporário (`model-puller`), o único com saída. O Ollama de produção nunca acessa a Internet.
 - A ai-api roda **sem root**, com sistema de arquivos **somente leitura** e sem capabilities.
@@ -299,10 +300,11 @@ Os demais valores podem ficar como estão. Eles são os padrões testados para 4
 | `GLPI_TIMEZONE` | America/Sao_Paulo | Fuso das datas de validade dos artigos |
 | `LLM_MODEL` / `EMBED_MODEL` | qwen2.5:3b / qwen3-embedding:0.6b | Modelos |
 | `LLM_NUM_CTX` / `EMBED_NUM_CTX` | 4096 / 512 | Contexto (afeta a RAM) |
-| `LLM_TEMPERATURE` / `LLM_MAX_TOKENS` / `LLM_TIMEOUT` | 0.1 / 512 / 180 | Geração |
+| `LLM_TEMPERATURE` / `LLM_MAX_TOKENS` / `LLM_TIMEOUT` | 0.1 / 512 / 180 | Geração (com seed fixa: mesma pergunta = mesma resposta) |
 | `RAG_MIN_SCORE` | 0.55 | Score mínimo de relevância. **Calibre** |
 | `RAG_MIN_TERM_COVERAGE` | 0.25 | Fração mínima dos termos da pergunta presentes nos trechos |
 | `RAG_MIN_ANSWER_OVERLAP` | 0.45 | Fração mínima da resposta presente nos documentos (fundamentação) |
+| `RAG_RELATIVE_MARGIN` | 0.15 | Só entram no contexto trechos com score até 0,15 abaixo do melhor (menos ruído para o modelo) |
 | `RAG_TOP_K` / `RAG_CANDIDATES` | 3 / 20 | Trechos enviados ao LLM / candidatos para checagem de permissão |
 | `RAG_MAX_CONTEXT_CHARS` | 4500 | Teto de contexto (tempo de resposta) |
 | `RAG_EXCLUDE_SUSPICIOUS` | true | Exclui artigos com prompt injection |

@@ -90,7 +90,10 @@ STOPWORDS = frozenset(
     é são ser foi era estar está estou estão esta tem têm ter tenho tinha há havia vai vou fazer
     faz fiz pode posso consigo conseguir preciso precisa quero queria gostaria
     não sim já também muito mais menos mesmo ainda só apenas bem mal lá aqui ali agora então
-    olá ola oi bom dia boa tarde noite obrigado obrigada favor ajuda ajudar problema
+    olá ola oi bom dia boa tarde noite obrigado obrigada favor ajuda ajudar problema problemas
+    funciona funcionando funcionou funcionar consegue conseguindo consegui conseguir dando deu
+    aparece aparecendo acontece acontecendo ocorre ocorrendo estava estou estamos fica ficou
+    continua continuando sempre hoje ontem agora alguém alguem pessoal coisa algo ninguem ninguém
     the of and to in is it for on with
     """.split()
 )

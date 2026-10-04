@@ -154,3 +154,4 @@ async def test_summarize_and_fallback(indexed, fake_ollama):
     fake_ollama.responder = lambda m: "isto não é json"
     s = await indexed.rag.summarize("Não consigo acessar o ERP", [])
     assert s["generated"] is False and s["title"] == "Não consigo acessar o ERP"
+

@@ -25,6 +25,7 @@ class RagParams:
     top_k: int
     max_chunks_per_article: int
     max_context_chars: int
+    relative_margin: float = 0.15
 
 
 @dataclass
@@ -36,8 +37,11 @@ class EvidenceDecision:
     context: list[Hit] = field(default_factory=list)
 
 
-def evaluate_evidence(question: str, hits: list[Hit], p: RagParams) -> EvidenceDecision:
-    if not tokens(question):
+def evaluate_evidence(question: str, hits: list[Hit], p: RagParams, alt_question: str | None = None) -> EvidenceDecision:
+    """`alt_question`: the question enriched with the previous turn (follow-ups).
+    Coverage uses the best of both, so neither the history dilutes a clear
+    question nor a short follow-up ("e no celular?") loses its context."""
+    if not tokens(question) and not (alt_question and tokens(alt_question)):
         return EvidenceDecision(False, "empty_query", 0.0, 0.0)
     if not hits:
         return EvidenceDecision(False, "no_documents", 0.0, 0.0)
@@ -46,7 +50,9 @@ def evaluate_evidence(question: str, hits: list[Hit], p: RagParams) -> EvidenceD
     if top_score < p.min_score:
         return EvidenceDecision(False, "low_score", top_score, 0.0)
 
-    floor = max(p.min_score - p.context_margin, 0.0)
+    # Only passages close to the best one: weaker articles in the context
+    # confuse small models (they start doubting the right document).
+    floor = max(p.min_score - p.context_margin, top_score - p.relative_margin, 0.0)
     selected: list[Hit] = []
     per_article: dict[int, int] = {}
     used = 0
@@ -69,6 +75,8 @@ def evaluate_evidence(question: str, hits: list[Hit], p: RagParams) -> EvidenceD
 
     context_text = "\n".join(f"{h.title}\n{h.text}" for h in selected)
     coverage = term_coverage(question, context_text)
+    if alt_question and alt_question != question:
+        coverage = max(coverage, term_coverage(alt_question, context_text))
     if coverage < p.min_term_coverage:
         return EvidenceDecision(False, "low_coverage", top_score, coverage)
     return EvidenceDecision(True, "ok", top_score, coverage, selected)

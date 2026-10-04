@@ -58,3 +58,24 @@ def test_redact_secrets():
     out = redact(line, ["topsecretvalue"])
     assert "abc.def" not in out and "hunter2" not in out and "s3cr3t" not in out
     assert redact("x topsecretvalue y", ["topsecretvalue"]) == "x *** y"
+
+
+def test_follow_up_with_generic_words_is_not_blocked_by_coverage():
+    """Caso real: artigo do FortiClient encontrado (score acima do threshold) não
+    pode ser barrado porque a pergunta tem palavras genéricas e veio após outra."""
+    from app.guard import RagParams, evaluate_evidence
+    from app.vectorstore import Hit
+
+    hit = Hit("c1", 1, 0, "Configuração do fortigate",
+              "Primeiro, você tem que ter o fortclient VPN instalado em sua maquina e realizar as "
+              "configurações abaixo dependendo da sua localidade. VPN Matriz 203.0.113.10:10443",
+              0.644, {})
+    p = RagParams(min_score=0.55, min_term_coverage=0.25, min_answer_overlap=0.45, context_margin=0.08,
+                  top_k=3, max_chunks_per_article=2, max_context_chars=4500)
+    question = "a conexão fortclient não está funcionando"
+    query = "Olá, estou com problemas de conectividade\n" + question
+    decision = evaluate_evidence(question, [hit], p, alt_question=query)
+    assert decision.ok, decision
+    # fora do assunto continua bloqueado
+    other = evaluate_evidence("minha impressora não está funcionando", [hit], p)
+    assert not other.ok and other.reason == "low_coverage"

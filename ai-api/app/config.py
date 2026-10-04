@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     embed_model: str = "qwen3-embedding:0.6b"
     llm_num_ctx: int = 4096
     llm_temperature: float = 0.1
+    llm_seed: int = 42
     llm_max_tokens: int = 512
     llm_timeout: float = 180.0
     embed_num_ctx: int = 512
@@ -62,6 +63,7 @@ class Settings(BaseSettings):
     rag_min_term_coverage: float = Field(default=0.25, ge=0.0, le=1.0)
     rag_min_answer_overlap: float = Field(default=0.45, ge=0.0, le=1.0)
     rag_context_margin: float = Field(default=0.08, ge=0.0, le=1.0)
+    rag_relative_margin: float = Field(default=0.15, ge=0.0, le=1.0)
     rag_top_k: int = Field(default=3, ge=1, le=10)
     rag_candidates: int = Field(default=20, ge=1, le=100)
     rag_max_chunks_per_article: int = Field(default=2, ge=1, le=10)
