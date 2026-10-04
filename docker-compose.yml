@@ -1,9 +1,9 @@
 # Agente de Suporte N1 - pilha local de IA (Ollama + Qdrant + ai-api)
 #
 # Orçamento de memória: 4 GB para o conjunto inteiro (soma dos mem_limit).
-#   ollama  3200m  (LLM ~1,9 GB + embeddings ~0,6 GB + KV cache + runtime)
-#   qdrant   448m
-#   ai-api   384m
+#   ollama  3456m  (medido: ~3,0 GB com LLM + embeddings carregados)
+#   qdrant   320m  (medido: ~50 MB com KB pequena)
+#   ai-api   320m  (medido: ~80 MB)
 #
 # Redes:
 #   glpi_ai_net  interna, SEM saída para a Internet. Ollama e Qdrant vivem só aqui.
@@ -45,8 +45,8 @@ services:
       - ollama_data:/root/.ollama
     networks:
       - glpi_ai_net
-    mem_limit: ${OLLAMA_MEM_LIMIT:-3200m}
-    memswap_limit: ${OLLAMA_MEM_LIMIT:-3200m}
+    mem_limit: ${OLLAMA_MEM_LIMIT:-3456m}
+    memswap_limit: ${OLLAMA_MEM_LIMIT:-3456m}
     cpus: ${OLLAMA_CPUS:-4}
     healthcheck:
       test: ["CMD", "ollama", "list"]
@@ -68,8 +68,8 @@ services:
       - qdrant_snapshots:/qdrant/snapshots
     networks:
       - glpi_ai_net
-    mem_limit: ${QDRANT_MEM_LIMIT:-448m}
-    memswap_limit: ${QDRANT_MEM_LIMIT:-448m}
+    mem_limit: ${QDRANT_MEM_LIMIT:-320m}
+    memswap_limit: ${QDRANT_MEM_LIMIT:-320m}
     cpus: ${QDRANT_CPUS:-1}
     cap_drop:
       - ALL
@@ -105,8 +105,8 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
-    mem_limit: ${AI_API_MEM_LIMIT:-384m}
-    memswap_limit: ${AI_API_MEM_LIMIT:-384m}
+    mem_limit: ${AI_API_MEM_LIMIT:-320m}
+    memswap_limit: ${AI_API_MEM_LIMIT:-320m}
     cpus: ${AI_API_CPUS:-1}
     read_only: true
     tmpfs:
