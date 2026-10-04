@@ -9,6 +9,7 @@
 #   glpi_ai_net  interna, SEM saída para a Internet. Ollama e Qdrant vivem só aqui.
 #   glpi_ai_edge com saída, usada apenas pela ai-api (precisa alcançar o GLPI)
 #                e pelo serviço "model-puller" (download dos modelos).
+#   Os nomes reais recebem o prefixo da stack (<projeto>_glpi_ai_net).
 #
 # Uso:
 #   docker compose up -d
@@ -138,12 +139,14 @@ services:
     networks:
       - glpi_ai_edge
 
+# Sem "name:" fixo: o Compose prefixa com o nome do projeto/stack
+# (ex.: aisupport-ai_glpi_ai_net). Assim duas pilhas no mesmo host (produção,
+# homologação, testes) nunca compartilham rede nem resolvem o "qdrant" ou o
+# "ollama" uma da outra.
 networks:
   glpi_ai_net:
-    name: glpi_ai_net
     internal: true
   glpi_ai_edge:
-    name: glpi_ai_edge
 
 volumes:
   ollama_data:

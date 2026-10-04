@@ -93,6 +93,7 @@ class RagService:
             min_term_coverage=s.rag_min_term_coverage,
             min_answer_overlap=s.rag_min_answer_overlap,
             context_margin=s.rag_context_margin,
+            relative_margin=s.rag_relative_margin,
             top_k=int(_clamp(opts.top_k, 1, 6, s.rag_top_k)),
             max_chunks_per_article=s.rag_max_chunks_per_article,
             max_context_chars=s.rag_max_context_chars,
@@ -174,7 +175,7 @@ class RagService:
         query = self.retrieval_query(question, history)
         hits = await self.retrieve(query, self._s.rag_candidates, allowed_ids)
         t_retrieval = int((time.monotonic() - t0) * 1000)
-        decision = evaluate_evidence(query, hits, p)
+        decision = evaluate_evidence(question, hits, p, alt_question=query)
         considered = self._considered(hits)
 
         if not decision.ok:

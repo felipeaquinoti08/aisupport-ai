@@ -117,6 +117,8 @@ class OllamaClient:
             "keep_alive": _keep_alive(self._s.ollama_keep_alive),
             "options": {
                 "temperature": self._s.llm_temperature if temperature is None else temperature,
+                # Mesma pergunta + mesmos documentos = mesma resposta
+                "seed": self._s.llm_seed,
                 "num_predict": max_tokens or self._s.llm_max_tokens,
                 "num_ctx": self._s.llm_num_ctx,
                 "top_p": 0.9,
