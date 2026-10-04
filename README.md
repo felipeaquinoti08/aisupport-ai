@@ -377,7 +377,7 @@ Todas as rotas exigem `Authorization: Bearer <AI_API_KEY>`, exceto `/api/live`.
 | GET | `/api/health` | Ollama, modelos (instalado/carregado), Qdrant, acesso ao GLPI |
 | GET | `/api/status` | Versão do contrato, modelos, parâmetros e estado do índice (artigos, trechos, última sincronização, erros, artigos suspeitos) |
 | POST | `/api/search` | Candidatos `{article_id, title, score, url, categories}`, sem conteúdo |
-| POST | `/api/chat` | `{question, allowed_article_ids, history, options}` → `{status: answered\|no_evidence\|clarify, reason, answer, sources, considered, top_score, model, timings}` |
+| POST | `/api/chat` | `{question, allowed_article_ids, history, options}` (com `options.selected=true` e um único artigo: o usuário escolheu o artigo sugerido, e as travas de relevância não se aplicam, mas a resposta continua validada) → `{status: answered\|no_evidence\|clarify, reason, answer, sources, considered, top_score, model, timings}` |
 | POST | `/api/summarize` | Título e resumo para o chamado (só com o que o usuário escreveu) |
 | POST | `/api/test-llm` | Teste rápido do modelo |
 | POST | `/api/index` | Reindexa artigos específicos |
@@ -405,7 +405,7 @@ docker run --rm -v "$PWD":/src -w /src python:3.13-slim sh -c \
   "pip install -q -r requirements-dev.txt && python -m pytest -q"
 ```
 
-São 53 testes, com Qdrant em memória e substitutos determinísticos do Ollama e do GLPI. Eles cobrem RAG, threshold, injeção, artigo malicioso, permissões, sincronização (reindexação, exclusão, alteração), falhas do GLPI, do Ollama e do Qdrant, autenticação e validação. O mapa completo dos cenários está no [plugin](https://github.com/felipeaquinoti08/aisupport-/blob/main/docs/TESTES.md).
+São 55 testes, com Qdrant em memória e substitutos determinísticos do Ollama e do GLPI. Eles cobrem RAG, threshold, injeção, artigo malicioso, permissões, sincronização (reindexação, exclusão, alteração), falhas do GLPI, do Ollama e do Qdrant, autenticação e validação. O mapa completo dos cenários está no [plugin](https://github.com/felipeaquinoti08/aisupport-/blob/main/docs/TESTES.md).
 
 ---
 

@@ -29,6 +29,10 @@ class ChatOptionsIn(BaseModel):
     temperature: float | None = Field(default=None, ge=0, le=2)
     max_tokens: int | None = Field(default=None, ge=1, le=4096)
     model: str | None = Field(default=None, max_length=120, pattern=r"^[A-Za-z0-9._:/-]+$")
+    # The user picked this article among the suggestions (allowed_article_ids
+    # must then hold exactly that article): the relevance gates are skipped,
+    # the answer must still come from the document.
+    selected: bool = False
 
 
 class ChatRequest(BaseModel):
