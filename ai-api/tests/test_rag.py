@@ -143,7 +143,7 @@ async def test_follow_up_question_uses_previous_context(indexed, fake_ollama):
 async def test_search_returns_candidates_without_content(indexed):
     res = await indexed.rag.search("impressora do financeiro não imprime")
     assert res["candidates"][0]["article_id"] == 20
-    assert set(res["candidates"][0]) == {"article_id", "title", "score", "url"}
+    assert set(res["candidates"][0]) == {"article_id", "title", "score", "url", "categories"}
 
 
 async def test_summarize_and_fallback(indexed, fake_ollama):
