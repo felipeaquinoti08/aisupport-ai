@@ -79,3 +79,29 @@ def test_follow_up_with_generic_words_is_not_blocked_by_coverage():
     # fora do assunto continua bloqueado
     other = evaluate_evidence("minha impressora não está funcionando", [hit], p)
     assert not other.ok and other.reason == "low_coverage"
+
+
+def test_answer_urls_are_repaired_or_rejected():
+    from app.guard import RagParams, validate_answer
+    from app.vectorstore import Hit
+    import json as _json
+
+    doc = Hit("c1", 1, 0, "Configuração do fortigate",
+              "Instale o fortclient VPN: https://www.fortinet.com/br/support/product-downloads#download-vpn-only "
+              "VPN Matriz 203.0.113.10:10443", 0.66, {})
+    p = RagParams(min_score=0.55, min_term_coverage=0.25, min_answer_overlap=0.45, context_margin=0.08,
+                  top_k=3, max_chunks_per_article=2, max_context_chars=4500)
+    ans = lambda text: _json.dumps({"resposta": text, "encontrado": True})
+
+    # mesmo domínio, link reescrito pelo modelo -> trocado pelo link exato do artigo
+    r = validate_answer(ans("Instale o fortclient VPN pelo site https://www.fortinet.com/support/product-downloads e use VPN Matriz 203.0.113.10:10443."), [doc], p)
+    assert r.ok and "https://www.fortinet.com/br/support/product-downloads#download-vpn-only" in r.answer
+    # link exato -> mantido
+    r = validate_answer(ans("Instale o fortclient VPN: https://www.fortinet.com/br/support/product-downloads#download-vpn-only."), [doc], p)
+    assert r.ok
+    # endereço do artigo com "https://" acrescentado pelo modelo -> volta à forma do artigo
+    r = validate_answer(ans("Os endereços da VPN Matriz são: https://203.0.113.10:10443"), [doc], p)
+    assert r.ok and "https://138" not in r.answer and "203.0.113.10:10443" in r.answer
+    # outro domínio -> resposta descartada
+    r = validate_answer(ans("Instale o fortclient VPN baixando em https://download-fortclient.example.com/vpn"), [doc], p)
+    assert not r.ok and r.reason == "external_url"

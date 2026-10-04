@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 
 from .text import answer_overlap, fold, term_coverage, tokens
@@ -127,15 +128,52 @@ def validate_answer(raw: str, context: list[Hit], p: RagParams) -> AnswerCheck:
         return AnswerCheck(False, "empty_answer", "", [], 0.0)
 
     context_text = "\n".join(f"{h.title}\n{h.text}" for h in context)
-    folded_context = fold(context_text)
-    for url in _URL.findall(answer):
-        if fold(url.rstrip(".,;")) not in folded_context:
-            return AnswerCheck(False, "external_url", "", [], 0.0)
+    answer, ok = _repair_urls(answer, context_text)
+    if not ok:
+        return AnswerCheck(False, "external_url", "", [], 0.0)
 
     overlap = answer_overlap(answer, context_text)
     if overlap < p.min_answer_overlap:
         return AnswerCheck(False, "low_grounding", "", [], overlap)
     return AnswerCheck(True, "ok", answer, attribute_sources(answer, context, cited), overlap)
+
+
+def _host(url: str) -> str:
+    return (urlsplit(url).hostname or "").lower().removeprefix("www.")
+
+
+def _repair_urls(answer: str, context_text: str) -> tuple[str, bool]:
+    """Every link of the answer must come from the documents.
+
+    A link with the same host as a document link but slightly rewritten by
+    the model (path, anchor, trailing chars) is replaced by the document's
+    exact link; a link to any other host makes the answer invalid.
+    """
+    doc_urls = [u.rstrip(".,;:") for u in _URL.findall(context_text)]
+    folded_context = fold(context_text)
+    for url in dict.fromkeys(u.rstrip(".,;:") for u in _URL.findall(answer)):
+        if fold(url) in folded_context:
+            continue
+        bare = url.split("://", 1)[-1]
+        if fold(bare) in folded_context:
+            # The model added a scheme to an address written bare in the document
+            answer = answer.replace(url, bare)
+            continue
+        same_host = [d for d in doc_urls if _host(d) and _host(d) == _host(url)]
+        if not same_host:
+            return answer, False
+        best = max(same_host, key=lambda d: len(_common_prefix(d, url)))
+        answer = answer.replace(url, best)
+    return answer, True
+
+
+def _common_prefix(a: str, b: str) -> str:
+    n = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        n += 1
+    return a[:n]
 
 
 def attribute_sources(answer: str, context: list[Hit], cited: list[int]) -> list[int]:

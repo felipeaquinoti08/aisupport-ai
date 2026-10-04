@@ -257,7 +257,7 @@ Os valores entre `[[...]]` vêm das **variáveis secretas do Komodo** (passo 2).
 | `<IP_DE_SAIDA_DO_GLPI>` | O IP com que o servidor do GLPI **chega** na VM de IA. Pela Internet: no servidor do GLPI, rode `curl -s https://ifconfig.me`. Pela rede privada ou VPN: o IP privado ou da VPN do servidor do GLPI. Se não souber, deixe `AI_API_ALLOWED_IPS=` vazio no primeiro teste e veja o IP no evento `ip_denied` dos logs depois de preencher. |
 | `<URL_DO_GLPI>` | O endereço do GLPI **acessível pela VM de IA**, sem barra no final. Ex.: `https://glpi.example.com`. Teste na VM: `curl -sI https://glpi.example.com/api.php/v2/status` deve responder (401 é normal). |
 | `<CLIENT_ID_OAUTH>` e `AISUPPORT_GLPI_CLIENT_SECRET` | No GLPI: *Configurar > Clientes OAuth > Adicionar*, com nome `Agente N1`, concessão **Password**, escopos **api** e **user**, ativo. Ao salvar, o GLPI mostra o **ID do cliente** e o **segredo**. Copie os dois (o plugin usa o mesmo cliente). |
-| `<USUARIO_DA_CONTA_DE_SERVICO>` e `AISUPPORT_GLPI_PASSWORD` | No GLPI: *Administração > Usuários > Adicionar*, um usuário **local** (ex.: `agente-n1`) com senha forte. Em *Autorizações*, dê um perfil com **Base de conhecimento > Administração da base de conhecimento** (para indexar todos os artigos) e **Chamados > Criar, Ver todos e Atribuir** (para o plugin abrir chamados), na entidade raiz, **recursivo**. |
+| `<USUARIO_DA_CONTA_DE_SERVICO>` e `AISUPPORT_GLPI_PASSWORD` | No GLPI: *Administração > Usuários > Adicionar*, um usuário **local** (ex.: `agente-n1`) com senha forte. Em *Autorizações*, dê um perfil com **Base de conhecimento > Administração da base de conhecimento** (para indexar todos os artigos) e **Chamados > Criar, Ver todos e Atualizar** (para o plugin abrir e registrar chamados), na entidade raiz, **recursivo**. |
 | API v2 habilitada | No GLPI: *Configurar > Geral > API > Habilitar a API REST de alto nível*. Sem isso, nenhuma credencial acima funciona. |
 
 Os demais valores podem ficar como estão. Eles são os padrões testados para 4 GB de RAM. Como conferir que tudo bate: depois do deploy, **[Testar conexão]** no GLPI deve mostrar *IA → API do GLPI: Leitura da KB autorizada* e *API v2 do GLPI: Autenticado como agente-n1*.
@@ -405,7 +405,7 @@ docker run --rm -v "$PWD":/src -w /src python:3.13-slim sh -c \
   "pip install -q -r requirements-dev.txt && python -m pytest -q"
 ```
 
-São 51 testes, com Qdrant em memória e substitutos determinísticos do Ollama e do GLPI. Eles cobrem RAG, threshold, injeção, artigo malicioso, permissões, sincronização (reindexação, exclusão, alteração), falhas do GLPI, do Ollama e do Qdrant, autenticação e validação. O mapa completo dos cenários está no [plugin](https://github.com/felipeaquinoti08/aisupport-/blob/main/docs/TESTES.md).
+São 53 testes, com Qdrant em memória e substitutos determinísticos do Ollama e do GLPI. Eles cobrem RAG, threshold, injeção, artigo malicioso, permissões, sincronização (reindexação, exclusão, alteração), falhas do GLPI, do Ollama e do Qdrant, autenticação e validação. O mapa completo dos cenários está no [plugin](https://github.com/felipeaquinoti08/aisupport-/blob/main/docs/TESTES.md).
 
 ---
 
