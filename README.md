@@ -151,10 +151,12 @@ Em **Settings > Variables**, crie as variáveis abaixo marcadas como **secret**.
 
 | Variável | Valor |
 |---|---|
-| `AISUPPORT_AI_API_KEY` | `openssl rand -hex 32` (a mesma vai no plugin do GLPI) |
-| `AISUPPORT_QDRANT_API_KEY` | `openssl rand -hex 32` |
-| `AISUPPORT_GLPI_CLIENT_SECRET` | segredo do cliente OAuth |
-| `AISUPPORT_GLPI_PASSWORD` | senha da conta de serviço |
+| `AISUPPORT_AI_API_KEY` | chave da ai-api (a mesma vai no plugin do GLPI) |
+| `AISUPPORT_QDRANT_API_KEY` | chave interna do Qdrant |
+| `AISUPPORT_GLPI_CLIENT_SECRET` | segredo do cliente OAuth do GLPI |
+| `AISUPPORT_GLPI_PASSWORD` | senha da conta de serviço do GLPI |
+
+Como gerar ou obter cada uma: [Onde obter cada valor](#onde-obter-cada-valor).
 
 ### 3. Stack
 
@@ -168,34 +170,96 @@ Em **Settings > Variables**, crie as variáveis abaixo marcadas como **secret**.
 | Run Build | **ligado**: constrói a imagem da ai-api no próprio servidor (ARM64) a cada deploy |
 | Auto Pull / Webhook | opcional, para redeploy ao dar push no `main` |
 
-Em **Environment**, cole o ambiente. O Komodo grava esse conteúdo como `.env` na pasta da stack e o Compose o usa, tanto na interpolação quanto no `env_file` da ai-api:
+Em **Environment**, cole o bloco abaixo e troque cada `<...>` pelo valor real (veja [Onde obter cada valor](#onde-obter-cada-valor)). O Komodo grava esse conteúdo como `.env` na pasta da stack e o Compose o usa, tanto na interpolação quanto no `env_file` da ai-api.
 
 ```env
+# ===================== Agente de Suporte N1 - pilha de IA =====================
 COMPOSE_PROJECT_NAME=glpi-ai
+# setup = baixa os modelos que faltam a cada deploy (pode esvaziar depois do 1º)
 COMPOSE_PROFILES=setup
 
-# Exposição da ai-api: IP privado da VM (VCN) ou da VPN, alcançável pelo GLPI.
-# Restrinja a porta na Security List/NSG da Oracle e no firewall da VM.
-AI_API_BIND=10.0.0.10
+# --- Imagens -------------------------------------------------------------------
+OLLAMA_IMAGE=ollama/ollama:0.35.1
+QDRANT_IMAGE=qdrant/qdrant:v1.19.1-unprivileged
+
+# --- Exposição da ai-api ------------------------------------------------------------
+AI_API_BIND=<IP_PRIVADO_DA_VM_DE_IA>
 AI_API_PORT=8080
 AI_API_KEY=[[AISUPPORT_AI_API_KEY]]
-AI_API_ALLOWED_IPS=203.0.113.20/32
+AI_API_ALLOWED_IPS=<IP_DE_SAIDA_DO_GLPI>/32
+AI_API_TLS_CERT=
+AI_API_TLS_KEY=
 
-QDRANT_API_KEY=[[AISUPPORT_QDRANT_API_KEY]]
-
-GLPI_URL=https://glpi.example.com
-GLPI_OAUTH_CLIENT_ID=<id do cliente OAuth>
+# --- GLPI (API REST v2, leitura da Base de Conhecimento) -------------------------------
+GLPI_URL=<URL_DO_GLPI>
+GLPI_OAUTH_CLIENT_ID=<CLIENT_ID_OAUTH>
 GLPI_OAUTH_CLIENT_SECRET=[[AISUPPORT_GLPI_CLIENT_SECRET]]
-GLPI_USERNAME=agente-n1
+GLPI_USERNAME=<USUARIO_DA_CONTA_DE_SERVICO>
 GLPI_PASSWORD=[[AISUPPORT_GLPI_PASSWORD]]
+GLPI_VERIFY_SSL=true
+GLPI_CA_BUNDLE=
+GLPI_TIMEOUT=20
+GLPI_TIMEZONE=America/Sao_Paulo
 
+# --- Qdrant ---------------------------------------------------------------------------------
+QDRANT_API_KEY=[[AISUPPORT_QDRANT_API_KEY]]
+QDRANT_COLLECTION=glpi_kb
+
+# --- Modelos ----------------------------------------------------------------------------------
 LLM_MODEL=qwen2.5:3b-instruct-q4_K_M
 EMBED_MODEL=qwen3-embedding:0.6b
+EXTRA_MODELS=
+LLM_NUM_CTX=4096
+EMBED_NUM_CTX=512
+LLM_TEMPERATURE=0.1
+LLM_MAX_TOKENS=512
+LLM_TIMEOUT=180
+OLLAMA_KEEP_ALIVE=-1
+
+# --- RAG (calibre RAG_MIN_SCORE com python -m app.calibrate) ------------------------------------
 RAG_MIN_SCORE=0.55
+RAG_MIN_TERM_COVERAGE=0.25
+RAG_MIN_ANSWER_OVERLAP=0.45
+RAG_TOP_K=3
+RAG_CANDIDATES=20
+RAG_CHUNK_SIZE=1200
+RAG_CHUNK_OVERLAP=200
+RAG_MAX_CONTEXT_CHARS=4500
+RAG_EXCLUDE_SUSPICIOUS=true
+
+# --- Sincronização da KB -------------------------------------------------------------------------
 SYNC_INTERVAL_MINUTES=15
+
+# --- Limites (soma das memórias = 4 GiB) ------------------------------------------------------------
+OLLAMA_MEM_LIMIT=3456m
+QDRANT_MEM_LIMIT=320m
+AI_API_MEM_LIMIT=320m
+OLLAMA_CPUS=4
+QDRANT_CPUS=1
+AI_API_CPUS=1
+OLLAMA_MAX_QUEUE=16
+
+# --- Logs ---------------------------------------------------------------------------------------------
+LOG_LEVEL=INFO
+DEBUG=false
 ```
 
-Os demais valores do [`.env.example`](.env.example) têm padrões e podem ficar de fora, como os limites de memória que somam 4 GiB. `AI_API_ALLOWED_IPS` deve conter o IP **de saída** do servidor do GLPI, do jeito que ele chega na VM de IA.
+Os valores entre `[[...]]` vêm das **variáveis secretas do Komodo** (passo 2). Se preferir não usar variáveis, coloque o valor direto no lugar.
+
+#### Onde obter cada valor
+
+| Placeholder / variável | Como conseguir |
+|---|---|
+| `AISUPPORT_AI_API_KEY` | Gere em qualquer terminal: `openssl rand -hex 32`. **A mesma chave** vai no plugin, em *Administração > Assistente de IA > Configurações > Servidor de IA > Chave da API*. |
+| `AISUPPORT_QDRANT_API_KEY` | Gere com `openssl rand -hex 32`. Só a pilha usa; não vai em nenhum outro lugar. |
+| `<IP_PRIVADO_DA_VM_DE_IA>` | Na Oracle Cloud: *Compute > Instances > (a VM) > Primary VNIC > Private IPv4 address* (ex.: `10.0.0.10`). Na própria VM: `hostname -I`. Se o GLPI acessa a IA por VPN (WireGuard/Tailscale), use o IP da VPN da VM (`ip -4 addr show tailscale0` / `wg0`). Use `0.0.0.0` só se o firewall já restringir a porta. |
+| `<IP_DE_SAIDA_DO_GLPI>` | O IP com que o servidor do GLPI **chega** na VM de IA. Pela Internet: no servidor do GLPI, rode `curl -s https://ifconfig.me`. Pela rede privada ou VPN: o IP privado ou da VPN do servidor do GLPI. Se não souber, deixe `AI_API_ALLOWED_IPS=` vazio no primeiro teste e veja o IP no evento `ip_denied` dos logs depois de preencher. |
+| `<URL_DO_GLPI>` | O endereço do GLPI **acessível pela VM de IA**, sem barra no final. Ex.: `https://glpi.example.com`. Teste na VM: `curl -sI https://glpi.example.com/api.php/v2/status` deve responder (401 é normal). |
+| `<CLIENT_ID_OAUTH>` e `AISUPPORT_GLPI_CLIENT_SECRET` | No GLPI: *Configurar > Clientes OAuth > Adicionar*, com nome `Agente N1`, concessão **Password**, escopos **api** e **user**, ativo. Ao salvar, o GLPI mostra o **ID do cliente** e o **segredo**. Copie os dois (o plugin usa o mesmo cliente). |
+| `<USUARIO_DA_CONTA_DE_SERVICO>` e `AISUPPORT_GLPI_PASSWORD` | No GLPI: *Administração > Usuários > Adicionar*, um usuário **local** (ex.: `agente-n1`) com senha forte. Em *Autorizações*, dê um perfil com **Base de conhecimento > Administração da base de conhecimento** (para indexar todos os artigos) e **Chamados > Criar, Ver todos e Atribuir** (para o plugin abrir chamados), na entidade raiz, **recursivo**. |
+| API v2 habilitada | No GLPI: *Configurar > Geral > API > Habilitar a API REST de alto nível*. Sem isso, nenhuma credencial acima funciona. |
+
+Os demais valores podem ficar como estão. Eles são os padrões testados para 4 GB de RAM. Como conferir que tudo bate: depois do deploy, **[Testar conexão]** no GLPI deve mostrar *IA → API do GLPI: Leitura da KB autorizada* e *API v2 do GLPI: Autenticado como agente-n1*.
 
 ### 4. Deploy e primeiro uso
 
