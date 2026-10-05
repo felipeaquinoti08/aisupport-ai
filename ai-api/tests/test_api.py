@@ -65,7 +65,7 @@ def test_full_flow_index_search_chat():
         assert r.status_code == 200 and body["status"] == "answered"
         assert body["sources"][0]["article_id"] == 10
         st = client.get("/api/status", headers=AUTH).json()
-        assert st["contract_version"] == "1.0" and st["index"]["articles"] == 2
+        assert st["contract_version"] == "1.1" and st["index"]["articles"] == 2
 
 
 def test_ollama_down_returns_503():
@@ -136,3 +136,18 @@ def test_jobs_require_key(path):
     client, _ = _client()
     with client:
         assert client.post(path).status_code == 401
+
+
+def test_general_endpoint_and_contract():
+    import json as _json
+    ollama = FakeOllama()
+    ollama.responder = lambda m: _json.dumps({"resposta": "1. Reinicie o roteador e aguarde dois minutos.", "respondeu": True})
+    client, _ = _client(ollama=ollama)
+    with client:
+        r = client.post("/api/general", json={"question": "A internet está lenta", "instructions": "Seja cordial."}, headers=AUTH)
+        assert r.status_code == 200 and r.json()["status"] == "answered"
+        assert client.post("/api/general", json={"question": "x", "extra": 1}, headers=AUTH).status_code == 422
+        assert client.post("/api/general", json={"question": "x"}).status_code == 401
+        assert client.get("/api/status", headers=AUTH).json()["contract_version"] == "1.1"
+        r = client.post("/api/chat", json={"question": "VPN", "allowed_article_ids": [10], "options": {"instructions": "x" * 1501}}, headers=AUTH)
+        assert r.status_code == 422

@@ -12,10 +12,10 @@ from typing import Any
 
 from . import sparse
 from .config import Settings
-from .guard import RagParams, evaluate_evidence, validate_answer
+from .guard import RagParams, evaluate_evidence, validate_answer, validate_general
 from .logging_setup import log
 from .ollama import OllamaClient
-from .prompts import ANSWER_SCHEMA, build_chat_messages, build_summary_messages
+from .prompts import ANSWER_SCHEMA, GENERAL_SCHEMA, build_chat_messages, build_general_messages, build_summary_messages
 from .text import clean_input, tokens
 from .vectorstore import Hit, VectorStore
 
@@ -32,6 +32,7 @@ class ChatOptions:
     max_tokens: int | None = None
     model: str | None = None
     selected: bool = False
+    instructions: str | None = None
 
 
 @dataclass
@@ -196,6 +197,7 @@ class RagService:
                 question if not selected or not documents
                 else f"{question}\n(O usuário indicou que o problema é sobre o assunto do documento \"{documents[0]['title']}\".)",
                 documents,
+                opts.instructions,
             ),
             model=model,
             temperature=_clamp(opts.temperature, 0.0, 1.0, None),
@@ -241,7 +243,7 @@ class RagService:
 
     # --- Resumo para o chamado -------------------------------------------------------------
 
-    async def summarize(self, question: str, transcript: list[dict[str, str]]) -> dict[str, Any]:
+    async def summarize(self, question: str, transcript: list[dict[str, str]], instructions: str | None = None) -> dict[str, Any]:
         question = clean_input(question)[: self._s.max_question_chars]
         transcript = [
             {"role": m.get("role", "user"), "content": clean_input(m.get("content", ""))[:1500]}
@@ -249,7 +251,7 @@ class RagService:
         ]
         fallback_title = question.splitlines()[0][:80] if question else "Solicitação via Agente N1"
         try:
-            result = await self._ollama.chat(build_summary_messages(question, transcript), max_tokens=self._s.summary_max_tokens, temperature=0.0, json_output=True)
+            result = await self._ollama.chat(build_summary_messages(question, transcript, instructions), max_tokens=self._s.summary_max_tokens, temperature=0.0, json_output=True)
             data = json.loads(result.text)
             title = clean_input(str(data.get("titulo") or ""))[:80]
             summary = clean_input(str(data.get("resumo") or ""))[:600]
@@ -258,6 +260,46 @@ class RagService:
         except Exception as e:
             log(logger, logging.WARNING, "summary_fallback", error=type(e).__name__)
         return {"title": fallback_title, "summary": question[:600], "generated": False}
+
+    # --- Orientação geral (fora da KB) ------------------------------------------------------
+
+    async def general(
+        self,
+        question: str,
+        history: list[dict[str, str]] | None = None,
+        instructions: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        model: str | None = None,
+    ) -> dict[str, Any]:
+        """Só é chamada pelo plugin quando a KB não resolveu e o administrador
+        liberou respostas fora dela; o plugin mostra o aviso ao usuário."""
+        t0 = time.monotonic()
+        question = clean_input(question)[: self._s.max_question_chars]
+        if not tokens(question):
+            return {"status": "declined", "reason": "empty_query", "answer": "", "model": "", "timings": {"total_ms": 0}}
+        history = [
+            {"role": m.get("role", "user"), "content": clean_input(m.get("content", ""))[:1500]}
+            for m in (history or [])[-6:]
+        ]
+        result = await self._ollama.chat(
+            build_general_messages(question, history, instructions),
+            model=await self._resolve_model(model),
+            temperature=_clamp(temperature, 0.0, 1.0, None),
+            max_tokens=int(_clamp(max_tokens, 64, 1024, self._s.llm_max_tokens)),
+            json_output=GENERAL_SCHEMA,
+        )
+        check = validate_general(result.text)
+        timings = {"llm_ms": result.duration_ms, "total_ms": int((time.monotonic() - t0) * 1000)}
+        log(logger, logging.INFO, "general_answer_checked", ok=check.ok, reason=check.reason,
+            prompt_tokens=result.prompt_tokens, output_tokens=result.output_tokens, **timings)
+        return {
+            "status": "answered" if check.ok else "declined",
+            "reason": check.reason,
+            "answer": check.answer,
+            "model": result.model,
+            "timings": timings,
+        }
 
     async def test_llm(self) -> dict[str, Any]:
         result = await self._ollama.chat(
