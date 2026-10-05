@@ -17,7 +17,7 @@ O plugin do GLPI fica em [aisupport-](https://github.com/felipeaquinoti08/aisupp
 - [Conta da API do GLPI](#conta-da-api-do-glpi)
 - [Indexação da Base de Conhecimento](#indexação-da-base-de-conhecimento)
 - [RAG e calibração do threshold](#rag-e-calibração-do-threshold)
-- [API (contrato 1.0)](#api-contrato-10)
+- [API (contrato 1.1)](#api-contrato-11)
 - [Rede e segurança](#rede-e-segurança)
 - [Testes](#testes)
 - [Troubleshooting](#troubleshooting)
@@ -379,7 +379,7 @@ A saída mostra, para cada threshold, a taxa de acerto, de artigo errado e de re
 
 ---
 
-## API (contrato 1.0)
+## API (contrato 1.1)
 
 Todas as rotas exigem `Authorization: Bearer <AI_API_KEY>`, exceto `/api/live`.
 
@@ -390,10 +390,21 @@ Todas as rotas exigem `Authorization: Bearer <AI_API_KEY>`, exceto `/api/live`.
 | GET | `/api/status` | Versão do contrato, modelos, parâmetros e estado do índice (artigos, trechos, última sincronização, erros, artigos suspeitos) |
 | POST | `/api/search` | Candidatos `{article_id, title, score, url, categories}`, sem conteúdo |
 | POST | `/api/chat` | `{question, allowed_article_ids, history, options}` (com `options.selected=true` e um único artigo: o usuário escolheu o artigo sugerido, e as travas de relevância não se aplicam, mas a resposta continua validada) → `{status: answered\|no_evidence\|clarify, reason, answer, sources, considered, top_score, model, timings}` |
-| POST | `/api/summarize` | Título e resumo para o chamado (só com o que o usuário escreveu) |
+| POST | `/api/summarize` | Título e resumo para o chamado (só com o que o usuário escreveu); aceita `instructions` |
+| POST | `/api/general` | `{question, history, instructions, temperature, max_tokens, model}` → `{status: answered\|declined, reason, answer, model, timings}`. Orientação geral de suporte, usada pelo plugin **só** quando a KB não resolve e o administrador liberou respostas fora dela |
 | POST | `/api/test-llm` | Teste rápido do modelo |
 | POST | `/api/index` | Reindexa artigos específicos |
 | POST | `/api/sync` / `/api/reindex` | Sincronização incremental / completa em segundo plano (202) |
+
+**Instruções do administrador** (`options.instructions` no `/api/chat`, `instructions` no `/api/summarize` e no `/api/general`, até 1.500 caracteres). Entram no prompt num bloco delimitado **abaixo das regras fixas** e são repetidas no fim da mensagem, onde o modelo pequeno as segue melhor. Mudam tom, tamanho e formato; as travas de evidência e a validação da resposta continuam iguais.
+
+**Orientação geral** (`/api/general`):
+- o prompt restringe a resposta a suporte de TI, com passos seguros para usuário comum, sem links e sem dados inventados da empresa;
+- o modelo pode recusar (`respondeu=false`) assuntos fora de TI;
+- citações e URLs são removidas da resposta;
+- a geração usa JSON schema, como no `/api/chat`.
+
+Mudanças do contrato 1.1 (compatível com 1.0): campos `instructions` e rota `/api/general`. Um plugin 1.2 com uma ai-api 1.0 continua funcionando, só sem esses recursos.
 
 Os erros são sempre `{"error": "<código>"}`, sem detalhes internos: `unauthorized`, `forbidden`, `llm_unavailable`, `llm_busy`, `vector_db_unavailable`, `index_not_ready`, `sync_running`, `invalid_request`.
 

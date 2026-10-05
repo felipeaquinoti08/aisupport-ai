@@ -201,3 +201,30 @@ def attribute_sources(answer: str, context: list[Hit], cited: list[int]) -> list
         if aid not in chosen:
             chosen.append(aid)
     return chosen
+
+
+@dataclass
+class GeneralCheck:
+    ok: bool
+    reason: str
+    answer: str
+
+
+def validate_general(raw: str) -> GeneralCheck:
+    """Orientação geral (fora da KB): JSON válido, o modelo aceitou responder,
+    texto útil e sem links (não há documento que os comprove)."""
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return GeneralCheck(False, "invalid_output", "")
+    if not isinstance(data, dict) or not isinstance(data.get("respondeu"), bool):
+        return GeneralCheck(False, "invalid_output", "")
+    if not data["respondeu"]:
+        return GeneralCheck(False, "llm_declined", "")
+    answer = data.get("resposta") if isinstance(data.get("resposta"), str) else ""
+    answer = _CITATION.sub("", answer)
+    answer = _URL.sub("", answer)
+    answer = re.sub(r"[ \t]+\n", "\n", re.sub(r"[ \t]{2,}", " ", answer)).strip()
+    if len(tokens(answer)) < _MIN_ANSWER_TOKENS:
+        return GeneralCheck(False, "empty_answer", "")
+    return GeneralCheck(True, "ok", answer)

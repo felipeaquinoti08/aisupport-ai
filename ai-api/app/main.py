@@ -20,7 +20,7 @@ from .container import Container, build_container
 from .errors import ServiceError, SyncAlreadyRunning
 from .logging_setup import log, setup_logging
 from .rag import ChatOptions
-from .schemas import ChatRequest, IndexRequest, SearchRequest, SummarizeRequest
+from .schemas import ChatRequest, GeneralRequest, IndexRequest, SearchRequest, SummarizeRequest
 
 APP_VERSION = "1.0.0"
 logger = logging.getLogger("api")
@@ -190,7 +190,14 @@ def create_app(container: Container | None = None, *, start_scheduler: bool = Tr
 
     @app.post("/api/summarize")
     async def summarize(body: SummarizeRequest, c: Container = Depends(require_key)) -> dict:
-        return await c.rag.summarize(body.question, [m.model_dump() for m in body.transcript])
+        return await c.rag.summarize(body.question, [m.model_dump() for m in body.transcript], body.instructions)
+
+    @app.post("/api/general")
+    async def general(body: GeneralRequest, c: Container = Depends(require_key)) -> dict:
+        return await c.rag.general(
+            body.question, [m.model_dump() for m in body.history], body.instructions,
+            body.temperature, body.max_tokens, body.model,
+        )
 
     @app.post("/api/test-llm")
     async def test_llm(c: Container = Depends(require_key)) -> dict:
