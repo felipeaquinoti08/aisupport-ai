@@ -15,7 +15,10 @@ from .config import Settings
 from .guard import RagParams, evaluate_evidence, validate_answer, validate_general
 from .logging_setup import log
 from .ollama import OllamaClient
-from .prompts import ANSWER_SCHEMA, GENERAL_SCHEMA, build_chat_messages, build_general_messages, build_summary_messages
+from .prompts import ANSWER_SCHEMA, GENERAL_SCHEMA, SUMMARY_SCHEMA, build_chat_messages, build_general_messages, build_summary_messages
+from .errors import LlmUnavailable
+from .ollama import LlmResult
+from .providers import ExternalLLM, PiiMasker, ProviderConfig, ProviderError, mask_messages, unmask_json_text
 from .text import clean_input, tokens
 from .vectorstore import Hit, VectorStore
 
@@ -46,6 +49,9 @@ class ChatResult:
     coverage: float = 0.0
     model: str = ""
     timings: dict[str, int] = field(default_factory=dict)
+    # "local" ou "<provedor>:<modelo>"; fallback = motivo da queda para o modelo local
+    provider: str = "local"
+    fallback: str = ""
 
 
 def _clamp(value, lo, hi, default):
@@ -78,10 +84,11 @@ class _EmbeddingCache:
 
 
 class RagService:
-    def __init__(self, settings: Settings, ollama: OllamaClient, store: VectorStore):
+    def __init__(self, settings: Settings, ollama: OllamaClient, store: VectorStore, external: ExternalLLM | None = None):
         self._s = settings
         self._ollama = ollama
         self._store = store
+        self._external = external or ExternalLLM()
         self._cache = _EmbeddingCache()
         self._models_cache: tuple[float, list[str]] = (0.0, [])
 
@@ -112,6 +119,49 @@ class RagService:
                 models = []
             self._models_cache = (time.monotonic(), models)
         return requested if requested in models else self._s.llm_model
+
+    # --- Geração: provedor externo ou modelo local ----------------------------------------
+
+    async def _generate(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        schema: dict[str, Any] | None,
+        max_tokens: int,
+        temperature: float | None,
+        model: str | None,
+        provider: ProviderConfig | None,
+    ) -> tuple[LlmResult, str, str]:
+        """Resultado, quem gerou ("local" ou "<provedor>:<modelo>") e o motivo da
+        queda para o modelo local. Com provedor externo, os dados pessoais são
+        mascarados antes do envio e restaurados na resposta."""
+        fallback = ""
+        if provider is not None:
+            masker = PiiMasker() if provider.mask_pii else None
+            outgoing = mask_messages(messages, masker) if masker else messages
+            try:
+                # Modelos de raciocínio contam o raciocínio no limite de saída
+                result = await self._external.chat(
+                    provider, outgoing, schema=schema, max_tokens=max(max_tokens, 4000), temperature=temperature,
+                )
+            except ProviderError as e:
+                log(logger, logging.WARNING, "provider_failed", provider=provider.kind, model=provider.model,
+                    error=e.code, status=e.status, fallback_local=provider.fallback_local)
+                if not provider.fallback_local:
+                    raise LlmUnavailable(f"provider:{e.code}") from e
+                fallback = e.code
+            else:
+                if masker and masker.count:
+                    result.text = unmask_json_text(result.text, masker) if schema else masker.unmask(result.text)
+                return result, provider.label, ""
+        result = await self._ollama.chat(
+            messages,
+            model=await self._resolve_model(model),
+            temperature=temperature,
+            max_tokens=max_tokens,
+            json_output=schema if schema else True,
+        )
+        return result, "local", fallback
 
     # --- Busca -------------------------------------------------------------------------
 
@@ -165,6 +215,7 @@ class RagService:
         allowed_ids: list[int],
         history: list[dict[str, str]] | None = None,
         opts: ChatOptions | None = None,
+        provider: ProviderConfig | None = None,
     ) -> ChatResult:
         t0 = time.monotonic()
         opts = opts or ChatOptions()
@@ -191,18 +242,18 @@ class RagService:
             )
 
         documents = [{"article_id": h.article_id, "title": h.title, "text": h.text} for h in decision.context]
-        model = await self._resolve_model(opts.model)
-        result = await self._ollama.chat(
+        result, used, fallback = await self._generate(
             build_chat_messages(
                 question if not selected or not documents
                 else f"{question}\n(O usuário indicou que o problema é sobre o assunto do documento \"{documents[0]['title']}\".)",
                 documents,
                 opts.instructions,
             ),
-            model=model,
+            schema=ANSWER_SCHEMA,
+            model=opts.model,
             temperature=_clamp(opts.temperature, 0.0, 1.0, None),
             max_tokens=int(_clamp(opts.max_tokens, 64, 1024, self._s.llm_max_tokens)),
-            json_output=ANSWER_SCHEMA,
+            provider=provider,
         )
         check = validate_answer(result.text, decision.context, p)
         timings = {
@@ -211,7 +262,7 @@ class RagService:
             "total_ms": int((time.monotonic() - t0) * 1000),
         }
         log(logger, logging.INFO, "chat_answer_checked", ok=check.ok, reason=check.reason,
-            top_score=round(decision.top_score, 4), overlap=round(check.overlap, 3),
+            top_score=round(decision.top_score, 4), overlap=round(check.overlap, 3), provider=used, fallback=fallback,
             prompt_tokens=result.prompt_tokens, output_tokens=result.output_tokens, **timings)
         if self._s.debug:
             log(logger, logging.DEBUG, "chat_debug", question=question, answer=result.text)
@@ -220,6 +271,7 @@ class RagService:
             return ChatResult(
                 status="no_evidence", reason=check.reason, considered=considered,
                 top_score=decision.top_score, coverage=decision.coverage, model=result.model, timings=timings,
+                provider=used, fallback=fallback,
             )
 
         by_article = {h.article_id: h for h in decision.context}
@@ -231,6 +283,7 @@ class RagService:
         return ChatResult(
             status="answered", reason="ok", answer=check.answer, sources=sources, considered=considered,
             top_score=decision.top_score, coverage=decision.coverage, model=result.model, timings=timings,
+            provider=used, fallback=fallback,
         )
 
     @staticmethod
@@ -243,7 +296,13 @@ class RagService:
 
     # --- Resumo para o chamado -------------------------------------------------------------
 
-    async def summarize(self, question: str, transcript: list[dict[str, str]], instructions: str | None = None) -> dict[str, Any]:
+    async def summarize(
+        self,
+        question: str,
+        transcript: list[dict[str, str]],
+        instructions: str | None = None,
+        provider: ProviderConfig | None = None,
+    ) -> dict[str, Any]:
         question = clean_input(question)[: self._s.max_question_chars]
         transcript = [
             {"role": m.get("role", "user"), "content": clean_input(m.get("content", ""))[:1500]}
@@ -251,15 +310,18 @@ class RagService:
         ]
         fallback_title = question.splitlines()[0][:80] if question else "Solicitação via Agente N1"
         try:
-            result = await self._ollama.chat(build_summary_messages(question, transcript, instructions), max_tokens=self._s.summary_max_tokens, temperature=0.0, json_output=True)
+            result, used, _ = await self._generate(
+                build_summary_messages(question, transcript, instructions),
+                schema=SUMMARY_SCHEMA, max_tokens=self._s.summary_max_tokens, temperature=0.0, model=None, provider=provider,
+            )
             data = json.loads(result.text)
             title = clean_input(str(data.get("titulo") or ""))[:80]
             summary = clean_input(str(data.get("resumo") or ""))[:600]
             if title and summary:
-                return {"title": title, "summary": summary, "generated": True}
+                return {"title": title, "summary": summary, "generated": True, "provider": used}
         except Exception as e:
             log(logger, logging.WARNING, "summary_fallback", error=type(e).__name__)
-        return {"title": fallback_title, "summary": question[:600], "generated": False}
+        return {"title": fallback_title, "summary": question[:600], "generated": False, "provider": ""}
 
     # --- Orientação geral (fora da KB) ------------------------------------------------------
 
@@ -271,6 +333,7 @@ class RagService:
         temperature: float | None = None,
         max_tokens: int | None = None,
         model: str | None = None,
+        provider: ProviderConfig | None = None,
     ) -> dict[str, Any]:
         """Só é chamada pelo plugin quando a KB não resolveu e o administrador
         liberou respostas fora dela; o plugin mostra o aviso ao usuário."""
@@ -282,16 +345,17 @@ class RagService:
             {"role": m.get("role", "user"), "content": clean_input(m.get("content", ""))[:1500]}
             for m in (history or [])[-6:]
         ]
-        result = await self._ollama.chat(
+        result, used, fallback = await self._generate(
             build_general_messages(question, history, instructions),
-            model=await self._resolve_model(model),
+            schema=GENERAL_SCHEMA,
+            model=model,
             temperature=_clamp(temperature, 0.0, 1.0, None),
             max_tokens=int(_clamp(max_tokens, 64, 1024, self._s.llm_max_tokens)),
-            json_output=GENERAL_SCHEMA,
+            provider=provider,
         )
         check = validate_general(result.text)
         timings = {"llm_ms": result.duration_ms, "total_ms": int((time.monotonic() - t0) * 1000)}
-        log(logger, logging.INFO, "general_answer_checked", ok=check.ok, reason=check.reason,
+        log(logger, logging.INFO, "general_answer_checked", ok=check.ok, reason=check.reason, provider=used, fallback=fallback,
             prompt_tokens=result.prompt_tokens, output_tokens=result.output_tokens, **timings)
         return {
             "status": "answered" if check.ok else "declined",
@@ -299,7 +363,29 @@ class RagService:
             "answer": check.answer,
             "model": result.model,
             "timings": timings,
+            "provider": used,
+            "fallback": fallback,
         }
+
+    async def test_provider(self, provider: ProviderConfig) -> dict[str, Any]:
+        """Teste do provedor externo (botão do plugin): sem queda para o modelo local."""
+        try:
+            result = await self._external.chat(
+                provider,
+                [{"role": "system", "content": "Responda em JSON."},
+                 {"role": "user", "content": 'Responda {"ok": true}.'}],
+                schema={"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]},
+                max_tokens=2000,
+                temperature=0.0,
+            )
+        except ProviderError as e:
+            return {"ok": False, "error": e.code, "status": e.status, "detail": e.detail}
+        try:
+            ok = json.loads(result.text).get("ok") is True
+        except (ValueError, AttributeError):
+            ok = False
+        return {"ok": ok, "error": "" if ok else "invalid_response", "model": result.model,
+                "duration_ms": result.duration_ms, "prompt_tokens": result.prompt_tokens, "output_tokens": result.output_tokens}
 
     async def test_llm(self) -> dict[str, Any]:
         result = await self._ollama.chat(

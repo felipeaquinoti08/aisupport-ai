@@ -48,6 +48,15 @@ GENERAL_SCHEMA = {
     "required": ["resposta", "respondeu"],
 }
 
+SUMMARY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "titulo": {"type": "string"},
+        "resumo": {"type": "string"},
+    },
+    "required": ["titulo", "resumo"],
+}
+
 _JSON_SPEC = "\n\nResponda em JSON:"
 _SUMMARY_SPEC = "\nResponda apenas com um JSON"
 

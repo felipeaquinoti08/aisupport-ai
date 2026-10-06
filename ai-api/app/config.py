@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Versão do contrato HTTP entre o plugin e a ai-api. O plugin recusa versões
 # MAJOR diferentes da que ele conhece.
-API_CONTRACT_VERSION = "1.1"
+API_CONTRACT_VERSION = "1.2"
 
 
 class Settings(BaseSettings):

@@ -8,6 +8,7 @@ from .config import Settings, get_settings
 from .glpi_client import GlpiClient
 from .indexer.service import IndexerService
 from .ollama import OllamaClient
+from .providers import ExternalLLM
 from .rag import RagService
 from .vectorstore import VectorStore
 
@@ -20,23 +21,27 @@ class Container:
     store: VectorStore
     indexer: IndexerService
     rag: RagService
+    external: ExternalLLM
 
     async def aclose(self) -> None:
         await self.glpi.aclose()
         await self.ollama.aclose()
+        await self.external.aclose()
         await self.store.aclose()
 
 
-def build_container(settings: Settings | None = None, *, glpi=None, ollama=None, store=None) -> Container:
+def build_container(settings: Settings | None = None, *, glpi=None, ollama=None, store=None, external=None) -> Container:
     settings = settings or get_settings()
     glpi = glpi or GlpiClient(settings)
     ollama = ollama or OllamaClient(settings)
     store = store or VectorStore(settings)
+    external = external or ExternalLLM()
     return Container(
         settings=settings,
         glpi=glpi,
         ollama=ollama,
         store=store,
         indexer=IndexerService(settings, glpi, ollama, store),
-        rag=RagService(settings, ollama, store),
+        rag=RagService(settings, ollama, store, external),
+        external=external,
     )

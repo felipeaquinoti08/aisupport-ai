@@ -65,7 +65,7 @@ def test_full_flow_index_search_chat():
         assert r.status_code == 200 and body["status"] == "answered"
         assert body["sources"][0]["article_id"] == 10
         st = client.get("/api/status", headers=AUTH).json()
-        assert st["contract_version"] == "1.1" and st["index"]["articles"] == 2
+        assert st["contract_version"] == "1.2" and st["index"]["articles"] == 2
 
 
 def test_ollama_down_returns_503():
@@ -148,6 +148,25 @@ def test_general_endpoint_and_contract():
         assert r.status_code == 200 and r.json()["status"] == "answered"
         assert client.post("/api/general", json={"question": "x", "extra": 1}, headers=AUTH).status_code == 422
         assert client.post("/api/general", json={"question": "x"}).status_code == 401
-        assert client.get("/api/status", headers=AUTH).json()["contract_version"] == "1.1"
+        assert client.get("/api/status", headers=AUTH).json()["contract_version"] == "1.2"
         r = client.post("/api/chat", json={"question": "VPN", "allowed_article_ids": [10], "options": {"instructions": "x" * 1501}}, headers=AUTH)
         assert r.status_code == 422
+
+
+def test_provider_fields_and_test_endpoint():
+    from tests.test_providers import FakeExternal
+    settings = make_settings()
+    glpi = FakeGlpi()
+    store = VectorStore(settings, client=AsyncQdrantClient(location=":memory:"))
+    c = build_container(settings, glpi=glpi, ollama=FakeOllama(), store=store, external=FakeExternal('{"ok": true}'))
+    client = TestClient(create_app(c, start_scheduler=False))
+    provider = {"kind": "anthropic", "api_key": "sk-ant-secreta", "model": "claude-opus-5-5", "effort": "low"}
+    with client:
+        r = client.post("/api/provider-test", json={"provider": provider}, headers=AUTH)
+        assert r.status_code == 200 and r.json()["ok"] is True and r.json()["model"] == "anthropic:claude-opus-5-5"
+        bad = client.post("/api/provider-test", json={"provider": {**provider, "kind": "outro"}}, headers=AUTH)
+        assert bad.status_code == 422 and "sk-ant-secreta" not in bad.text
+        bad = client.post("/api/provider-test", json={"provider": {**provider, "base_url": "file:///etc/passwd"}}, headers=AUTH)
+        assert bad.status_code == 422
+        r = client.post("/api/chat", json={"question": "VPN", "allowed_article_ids": [10], "provider": provider}, headers=AUTH)
+        assert r.status_code in (200, 503)
