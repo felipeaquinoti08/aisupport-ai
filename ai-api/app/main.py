@@ -20,7 +20,7 @@ from .container import Container, build_container
 from .errors import ServiceError, SyncAlreadyRunning
 from .logging_setup import log, setup_logging
 from .rag import ChatOptions
-from .schemas import ChatRequest, GeneralRequest, IndexRequest, SearchRequest, SummarizeRequest
+from .schemas import ChatRequest, GeneralRequest, IndexRequest, ProviderTestRequest, SearchRequest, SummarizeRequest
 
 APP_VERSION = "1.0.0"
 logger = logging.getLogger("api")
@@ -185,19 +185,28 @@ def create_app(container: Container | None = None, *, start_scheduler: bool = Tr
             sorted({i for i in body.allowed_article_ids if i > 0}),
             [m.model_dump() for m in body.history],
             ChatOptions(**body.options.model_dump()),
+            body.provider.config() if body.provider else None,
         )
         return asdict(result)
 
     @app.post("/api/summarize")
     async def summarize(body: SummarizeRequest, c: Container = Depends(require_key)) -> dict:
-        return await c.rag.summarize(body.question, [m.model_dump() for m in body.transcript], body.instructions)
+        return await c.rag.summarize(
+            body.question, [m.model_dump() for m in body.transcript], body.instructions,
+            body.provider.config() if body.provider else None,
+        )
 
     @app.post("/api/general")
     async def general(body: GeneralRequest, c: Container = Depends(require_key)) -> dict:
         return await c.rag.general(
             body.question, [m.model_dump() for m in body.history], body.instructions,
             body.temperature, body.max_tokens, body.model,
+            body.provider.config() if body.provider else None,
         )
+
+    @app.post("/api/provider-test")
+    async def provider_test(body: ProviderTestRequest, c: Container = Depends(require_key)) -> dict:
+        return await c.rag.test_provider(body.provider.config())
 
     @app.post("/api/test-llm")
     async def test_llm(c: Container = Depends(require_key)) -> dict:

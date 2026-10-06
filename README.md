@@ -17,7 +17,8 @@ O plugin do GLPI fica em [aisupport-](https://github.com/felipeaquinoti08/aisupp
 - [Conta da API do GLPI](#conta-da-api-do-glpi)
 - [Indexação da Base de Conhecimento](#indexação-da-base-de-conhecimento)
 - [RAG e calibração do threshold](#rag-e-calibração-do-threshold)
-- [API (contrato 1.1)](#api-contrato-11)
+- [API (contrato 1.2)](#api-contrato-12)
+- [Provedor externo (OpenAI, Azure, Anthropic)](#provedor-externo-openai-azure-anthropic)
 - [Rede e segurança](#rede-e-segurança)
 - [Testes](#testes)
 - [Troubleshooting](#troubleshooting)
@@ -379,7 +380,7 @@ A saída mostra, para cada threshold, a taxa de acerto, de artigo errado e de re
 
 ---
 
-## API (contrato 1.1)
+## API (contrato 1.2)
 
 Todas as rotas exigem `Authorization: Bearer <AI_API_KEY>`, exceto `/api/live`.
 
@@ -392,7 +393,8 @@ Todas as rotas exigem `Authorization: Bearer <AI_API_KEY>`, exceto `/api/live`.
 | POST | `/api/chat` | `{question, allowed_article_ids, history, options}` (com `options.selected=true` e um único artigo: o usuário escolheu o artigo sugerido, e as travas de relevância não se aplicam, mas a resposta continua validada) → `{status: answered\|no_evidence\|clarify, reason, answer, sources, considered, top_score, model, timings}` |
 | POST | `/api/summarize` | Título e resumo para o chamado (só com o que o usuário escreveu); aceita `instructions` |
 | POST | `/api/general` | `{question, history, instructions, temperature, max_tokens, model}` → `{status: answered\|declined, reason, answer, model, timings}`. Orientação geral de suporte, usada pelo plugin **só** quando a KB não resolve e o administrador liberou respostas fora dela |
-| POST | `/api/test-llm` | Teste rápido do modelo |
+| POST | `/api/test-llm` | Teste rápido do modelo local |
+| POST | `/api/provider-test` | `{provider}` → `{ok, error, model, duration_ms}`. Chamada curta ao provedor externo, sem queda para o modelo local |
 | POST | `/api/index` | Reindexa artigos específicos |
 | POST | `/api/sync` / `/api/reindex` | Sincronização incremental / completa em segundo plano (202) |
 
@@ -404,11 +406,41 @@ Todas as rotas exigem `Authorization: Bearer <AI_API_KEY>`, exceto `/api/live`.
 - citações e URLs são removidas da resposta;
 - a geração usa JSON schema, como no `/api/chat`.
 
+Mudanças do contrato 1.2 (compatível com 1.1): campo opcional `provider` em `/api/chat`, `/api/general` e `/api/summarize`; rota `/api/provider-test`; respostas com `provider` (quem redigiu) e `fallback` (motivo da queda para o modelo local).
+
 Mudanças do contrato 1.1 (compatível com 1.0): campos `instructions` e rota `/api/general`. Um plugin 1.2 com uma ai-api 1.0 continua funcionando, só sem esses recursos.
 
 Os erros são sempre `{"error": "<código>"}`, sem detalhes internos: `unauthorized`, `forbidden`, `llm_unavailable`, `llm_busy`, `vector_db_unavailable`, `index_not_ready`, `sync_running`, `invalid_request`.
 
 ---
+
+## Provedor externo (OpenAI, Azure, Anthropic)
+
+A **busca é sempre local**: embeddings no Ollama, trechos no Qdrant e as travas de evidência. Só a **redação** da resposta pode ir para um provedor externo, escolhido na aba *Provedor de IA* do plugin. O plugin envia o campo `provider` em cada requisição:
+
+```json
+{"kind": "openai|azure|compatible|anthropic", "api_key": "...", "model": "...",
+ "base_url": "", "api_version": "", "effort": "low|medium|high|", "timeout": 45,
+ "mask_pii": true, "fallback_local": true}
+```
+
+| `kind` | Chamada |
+|---|---|
+| `openai` | `POST {base_url ou https://api.openai.com/v1}/chat/completions`, `Authorization: Bearer`, `response_format` com JSON schema estrito |
+| `compatible` | O mesmo formato na `base_url` informada. Se o serviço não aceitar `json_schema`, tenta `json_object` e depois sem formato; parâmetros não suportados (`temperature`, `max_completion_tokens`) são retirados automaticamente |
+| `azure` | Cabeçalho `api-key`. `base_url` terminando em `/models` = Azure AI Foundry (Model Inference API). Com `api_version` = formato clássico `/openai/deployments/{model}/chat/completions`. Sem `api_version` = endpoint v1 (`/openai/v1/chat/completions`) |
+| `anthropic` | SDK oficial `anthropic`, Messages API com `output_config.format` (JSON schema) e `effort`; nos modelos atuais, `fallbacks: "default"` para recusas de segurança. `stop_reason: refusal` vira o erro `refused` |
+
+Garantias:
+- **A validação não muda.** A resposta do provedor passa pelas mesmas verificações da resposta local (fundamentação, citações, links). Uma resposta que não vem dos documentos é descartada.
+- **Dados pessoais** (`mask_pii`): e-mails, CPF/CNPJ, telefones e IPs da pergunta, do histórico e dos trechos viram marcadores antes do envio e são restaurados na resposta. O prompt do sistema não tem dados pessoais.
+- **Queda para o modelo local** (`fallback_local`): erros do provedor (`auth_failed`, `rate_limited`, `timeout`, `unreachable`, `provider_error`, `refused`...) fazem o modelo local redigir a resposta. O resultado traz `provider: "local"` e `fallback: <código>`, e o log registra `provider_failed`. Sem a queda, a rota devolve `llm_unavailable`.
+- **A chave** chega a cada requisição (autenticada pela `AI_API_KEY`), não é gravada, não aparece em logs e não é devolvida nos erros de validação.
+
+Recursos e rede:
+- Com um provedor externo, o modelo de chat local só é carregado quando o provedor falha. O `OLLAMA_KEEP_ALIVE` o descarrega depois, e a memória em uso cai para ~1 GB (embeddings + Qdrant + ai-api).
+- Para não ter reserva, deixe `LLM_MODEL` como está e desligue a queda no plugin. O modelo continua baixado, mas não é carregado.
+- A ai-api precisa de saída HTTPS para o endereço do provedor. A rede `glpi_ai_edge` já tem; libere no firewall `api.openai.com`, `*.openai.azure.com`/`*.services.ai.azure.com` ou `api.anthropic.com`, conforme o caso.
 
 ## Rede e segurança
 

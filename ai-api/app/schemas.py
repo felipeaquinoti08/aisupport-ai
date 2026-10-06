@@ -15,6 +15,26 @@ class HistoryMessage(BaseModel):
     content: str = Field(max_length=4000)
 
 
+class ProviderIn(BaseModel):
+    """Provedor externo que redige a resposta (a busca continua local).
+    Enviado pelo plugin a cada requisição; a chave não é gravada nem logada."""
+
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["openai", "azure", "compatible", "anthropic"]
+    api_key: str = Field(min_length=1, max_length=500, repr=False)
+    model: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9._:/@-]+$")
+    base_url: str = Field(default="", max_length=500, pattern=r"^(https?://[^\s]+)?$")
+    api_version: str = Field(default="", max_length=40, pattern=r"^[A-Za-z0-9._-]*$")
+    effort: Literal["", "low", "medium", "high"] = ""
+    timeout: float = Field(default=45, ge=5, le=180)
+    mask_pii: bool = True
+    fallback_local: bool = True
+
+    def config(self):
+        from .providers import ProviderConfig
+        return ProviderConfig(**self.model_dump())
+
+
 class SearchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     question: str = Field(min_length=1, max_length=4000)
@@ -45,6 +65,7 @@ class ChatRequest(BaseModel):
     allowed_article_ids: list[int] = Field(max_length=200)
     history: list[HistoryMessage] = Field(default_factory=list, max_length=12)
     options: ChatOptionsIn = Field(default_factory=ChatOptionsIn)
+    provider: ProviderIn | None = None
 
 
 class SummarizeRequest(BaseModel):
@@ -52,6 +73,7 @@ class SummarizeRequest(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
     transcript: list[HistoryMessage] = Field(default_factory=list, max_length=40)
     instructions: str | None = Field(default=None, max_length=1000)
+    provider: ProviderIn | None = None
 
 
 class GeneralRequest(BaseModel):
@@ -65,6 +87,12 @@ class GeneralRequest(BaseModel):
     temperature: float | None = Field(default=None, ge=0, le=2)
     max_tokens: int | None = Field(default=None, ge=1, le=4096)
     model: str | None = Field(default=None, max_length=120, pattern=r"^[A-Za-z0-9._:/-]+$")
+    provider: ProviderIn | None = None
+
+
+class ProviderTestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider: ProviderIn
 
 
 class IndexRequest(BaseModel):

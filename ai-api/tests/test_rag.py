@@ -149,7 +149,7 @@ async def test_search_returns_candidates_without_content(indexed):
 async def test_summarize_and_fallback(indexed, fake_ollama):
     fake_ollama.responder = lambda m: '{"titulo": "Erro ao acessar o ERP", "resumo": "Usuário não consegue acessar o ERP."}'
     s = await indexed.rag.summarize("Não consigo acessar o ERP", [{"role": "user", "content": "Não consigo acessar o ERP"}])
-    assert s == {"title": "Erro ao acessar o ERP", "summary": "Usuário não consegue acessar o ERP.", "generated": True}
+    assert s == {"title": "Erro ao acessar o ERP", "summary": "Usuário não consegue acessar o ERP.", "generated": True, "provider": "local"}
 
     fake_ollama.responder = lambda m: "isto não é json"
     s = await indexed.rag.summarize("Não consigo acessar o ERP", [])
