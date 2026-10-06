@@ -198,6 +198,17 @@ class FakeExternal:
         text = self.reply(messages) if callable(self.reply) else self.reply
         return LlmResult(text=text, model=provider.label, prompt_tokens=1, output_tokens=1, duration_ms=5)
 
+    async def answer_text(self, provider, messages, *, max_tokens, domains=None, temperature=None):
+        from app.providers import TextResult
+        self.seen.append(messages)
+        self.domains = domains
+        if self.error:
+            raise self.error
+        reply = self.reply(messages) if callable(self.reply) else self.reply
+        text, cites = reply if isinstance(reply, tuple) else (reply, [])
+        return TextResult(text=text, model=provider.label, citations=cites, prompt_tokens=1, output_tokens=1,
+                          duration_ms=5, searched=bool(domains))
+
     async def aclose(self):
         pass
 

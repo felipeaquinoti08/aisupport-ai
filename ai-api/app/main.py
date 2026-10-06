@@ -20,7 +20,7 @@ from .container import Container, build_container
 from .errors import ServiceError, SyncAlreadyRunning
 from .logging_setup import log, setup_logging
 from .rag import ChatOptions
-from .schemas import ChatRequest, GeneralRequest, IndexRequest, ProviderTestRequest, SearchRequest, SummarizeRequest
+from .schemas import ChatRequest, ExternalRequest, GeneralRequest, IndexRequest, ProviderTestRequest, SearchRequest, SummarizeRequest
 
 APP_VERSION = "1.0.0"
 logger = logging.getLogger("api")
@@ -202,6 +202,18 @@ def create_app(container: Container | None = None, *, start_scheduler: bool = Tr
             body.question, [m.model_dump() for m in body.history], body.instructions,
             body.temperature, body.max_tokens, body.model,
             body.provider.config() if body.provider else None,
+        )
+
+    @app.post("/api/external")
+    async def external(body: ExternalRequest, c: Container = Depends(require_key)) -> dict:
+        return await c.rag.external(
+            body.question,
+            body.provider.config(),
+            body.scope.model_dump(),
+            sorted({i for i in body.allowed_article_ids if i > 0}),
+            [m.model_dump() for m in body.history],
+            ChatOptions(**body.options.model_dump()),
+            body.include_kb,
         )
 
     @app.post("/api/provider-test")

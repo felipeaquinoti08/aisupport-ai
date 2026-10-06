@@ -188,6 +188,6 @@ def looks_like_injection(text: str) -> bool:
 
 def neutralize_for_prompt(text: str) -> str:
     """Impede que o conteúdo feche/abra os delimitadores usados no prompt."""
-    text = re.sub(r"<\s*/?\s*(documento|documentos|pergunta|conversa|solicitacao|historico|instrucoes_admin|system|assistant|user)\b[^>]*>", "[tag removida]", text, flags=re.I)
+    text = re.sub(r"<\s*/?\s*(documento|documentos|pergunta|conversa|solicitacao|historico|instrucoes_admin|escopo|system|assistant|user)\b[^>]*>", "[tag removida]", text, flags=re.I)
     text = text.replace("<|", "< |").replace("|>", "| >")
     return text
