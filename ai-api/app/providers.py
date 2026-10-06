@@ -32,6 +32,31 @@ DEFAULT_BASE_URLS = {
 _ANTHROPIC_FALLBACK_MODELS = ("claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5")
 
 
+@dataclass
+class TextResult:
+    """Resposta em texto livre (modo com escopo), com as fontes citadas pela pesquisa."""
+
+    text: str
+    model: str
+    citations: list[dict[str, str]]
+    prompt_tokens: int
+    output_tokens: int
+    duration_ms: int
+    searched: bool = False
+
+
+# Pesquisa ao vivo com filtro de domínios: Responses API (OpenAI) e web_search (Anthropic)
+WEB_SEARCH_KINDS = ("openai", "anthropic")
+_ANTHROPIC_BASIC_SEARCH = ("claude-haiku-", "claude-3", "claude-sonnet-4-5", "claude-opus-4-5", "claude-opus-4-1", "claude-opus-4-0", "claude-sonnet-4-0")
+
+
+def supports_web_search(cfg: "ProviderConfig") -> bool:
+    """Pesquisa com filtro de domínios: Anthropic e a API oficial da OpenAI."""
+    if cfg.kind == "anthropic":
+        return True
+    return cfg.kind == "openai" and (not cfg.base_url or "api.openai.com" in cfg.base_url)
+
+
 class ProviderError(Exception):
     """Falha do provedor externo. `code` é estável e vai para o log e o painel."""
 
@@ -103,6 +128,133 @@ class ExternalLLM:
         log(logger, logging.INFO, "provider_call", provider=cfg.kind, model=cfg.model, ms=ms,
             prompt_tokens=usage[0], output_tokens=usage[1])
         return LlmResult(text=text, model=cfg.label, prompt_tokens=usage[0], output_tokens=usage[1], duration_ms=ms)
+
+    # --- Texto livre (escopo + fontes externas) ---------------------------------------------
+
+    async def answer_text(
+        self,
+        cfg: ProviderConfig,
+        messages: list[dict[str, str]],
+        *,
+        max_tokens: int,
+        domains: list[str] | None = None,
+        temperature: float | None = None,
+    ) -> TextResult:
+        """Resposta em texto. Com `domains` e provedor compatível, o modelo
+        pesquisa na hora somente nesses sites e as citações voltam junto."""
+        t0 = time.monotonic()
+        search = bool(domains) and supports_web_search(cfg)
+        if cfg.kind == "anthropic":
+            text, cites, usage = await self._anthropic_text(cfg, messages, max_tokens, domains if search else None)
+        elif search:
+            text, cites, usage = await self._openai_responses(cfg, messages, max_tokens, domains)
+        elif cfg.kind in ("openai", "azure", "compatible"):
+            text, usage = await self._openai_like(cfg, messages, None, max_tokens, temperature)
+            cites = []
+        else:
+            raise ProviderError("invalid_provider")
+        ms = int((time.monotonic() - t0) * 1000)
+        log(logger, logging.INFO, "provider_text", provider=cfg.kind, model=cfg.model, ms=ms, web_search=search,
+            citations=len(cites), prompt_tokens=usage[0], output_tokens=usage[1])
+        return TextResult(text=text, model=cfg.label, citations=cites, prompt_tokens=usage[0],
+                          output_tokens=usage[1], duration_ms=ms, searched=search)
+
+    async def _openai_responses(self, cfg, messages, max_tokens, domains) -> tuple[str, list[dict[str, str]], tuple[int, int]]:
+        base = (cfg.base_url or DEFAULT_BASE_URLS["openai"]).rstrip("/")
+        payload = {
+            "model": cfg.model,
+            "instructions": "\n\n".join(m["content"] for m in messages if m["role"] == "system"),
+            "input": [{"role": m["role"], "content": m["content"]} for m in messages if m["role"] != "system"],
+            "tools": [{"type": "web_search", "filters": {"allowed_domains": list(domains)}}],
+            "max_output_tokens": max_tokens,
+        }
+        data = await self._post(f"{base}/responses", {"Authorization": f"Bearer {cfg.api_key}"}, payload, cfg.timeout)
+        texts: list[str] = []
+        cites: list[dict[str, str]] = []
+        for item in data.get("output") or []:
+            if item.get("type") != "message":
+                continue
+            for part in item.get("content") or []:
+                if part.get("type") == "output_text":
+                    texts.append(part.get("text") or "")
+                    for ann in part.get("annotations") or []:
+                        if ann.get("type") == "url_citation" and ann.get("url"):
+                            cites.append({"url": ann["url"], "title": ann.get("title") or ""})
+                elif part.get("type") == "refusal":
+                    raise ProviderError("refused")
+        text = "\n".join(t for t in texts if t).strip()
+        if not text:
+            raise ProviderError("empty_response")
+        usage = data.get("usage") or {}
+        return text, cites, (int(usage.get("input_tokens") or 0), int(usage.get("output_tokens") or 0))
+
+    async def _anthropic_text(self, cfg, messages, max_tokens, domains) -> tuple[str, list[dict[str, str]], tuple[int, int]]:
+        system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
+        turns: list[dict[str, Any]] = [{"role": m["role"], "content": m["content"]} for m in messages if m["role"] != "system"]
+        params: dict[str, Any] = {"model": cfg.model, "max_tokens": max_tokens}
+        if system:
+            params["system"] = system
+        if cfg.effort:
+            params["output_config"] = {"effort": cfg.effort}
+        if domains:
+            basic = cfg.model.startswith(_ANTHROPIC_BASIC_SEARCH)
+            params["tools"] = [{
+                "type": "web_search_20250305" if basic else "web_search_20260209",
+                "name": "web_search",
+                "allowed_domains": list(domains),
+                "max_uses": 3,
+            }]
+        fallback = cfg.model in _ANTHROPIC_FALLBACK_MODELS and not cfg.base_url
+        client = self._anthropic_factory(cfg)
+        texts: list[str] = []
+        cites: list[dict[str, str]] = []
+        usage = [0, 0]
+        try:
+            # Ferramentas do servidor podem pausar o turno (pause_turn): retoma até 3 vezes
+            for _ in range(4):
+                if fallback:
+                    response = await client.beta.messages.create(
+                        **params, messages=turns, betas=["server-side-fallback-2026-07-01"], fallbacks="default",
+                    )
+                else:
+                    response = await client.messages.create(**params, messages=turns)
+                usage[0] += int(getattr(response.usage, "input_tokens", 0) or 0)
+                usage[1] += int(getattr(response.usage, "output_tokens", 0) or 0)
+                if response.stop_reason == "refusal":
+                    raise ProviderError("refused")
+                for block in response.content:
+                    btype = getattr(block, "type", "")
+                    if btype == "text":
+                        texts.append(block.text)
+                        for c in getattr(block, "citations", None) or []:
+                            url = getattr(c, "url", None)
+                            if url:
+                                cites.append({"url": url, "title": getattr(c, "title", "") or ""})
+                if response.stop_reason != "pause_turn":
+                    break
+                turns = turns + [{"role": "assistant", "content": response.content}]
+        except anthropic.AuthenticationError as e:
+            raise ProviderError("auth_failed", 401) from e
+        except anthropic.PermissionDeniedError as e:
+            raise ProviderError("forbidden", 403) from e
+        except anthropic.NotFoundError as e:
+            raise ProviderError("model_not_found", 404) from e
+        except anthropic.RateLimitError as e:
+            raise ProviderError("rate_limited", 429) from e
+        except anthropic.BadRequestError as e:
+            raise ProviderError("bad_request", 400, str(e)) from e
+        except anthropic.APITimeoutError as e:
+            raise ProviderError("timeout") from e
+        except anthropic.APIStatusError as e:
+            raise ProviderError(_status_code(e.status_code), e.status_code) from e
+        except anthropic.APIConnectionError as e:
+            raise ProviderError("unreachable") from e
+        finally:
+            await client.close()
+        text = "".join(texts).strip()
+        if not text:
+            raise ProviderError("empty_response")
+        return text, cites, (usage[0], usage[1])
 
     # --- OpenAI / Azure / compatível ----------------------------------------------------
 

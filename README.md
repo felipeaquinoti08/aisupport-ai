@@ -17,7 +17,7 @@ O plugin do GLPI fica em [aisupport-](https://github.com/felipeaquinoti08/aisupp
 - [Conta da API do GLPI](#conta-da-api-do-glpi)
 - [Indexação da Base de Conhecimento](#indexação-da-base-de-conhecimento)
 - [RAG e calibração do threshold](#rag-e-calibração-do-threshold)
-- [API (contrato 1.2)](#api-contrato-12)
+- [API (contrato 1.3)](#api-contrato-13)
 - [Provedor externo (OpenAI, Azure, Anthropic)](#provedor-externo-openai-azure-anthropic)
 - [Rede e segurança](#rede-e-segurança)
 - [Testes](#testes)
@@ -380,7 +380,7 @@ A saída mostra, para cada threshold, a taxa de acerto, de artigo errado e de re
 
 ---
 
-## API (contrato 1.2)
+## API (contrato 1.3)
 
 Todas as rotas exigem `Authorization: Bearer <AI_API_KEY>`, exceto `/api/live`.
 
@@ -394,6 +394,7 @@ Todas as rotas exigem `Authorization: Bearer <AI_API_KEY>`, exceto `/api/live`.
 | POST | `/api/summarize` | Título e resumo para o chamado (só com o que o usuário escreveu); aceita `instructions` |
 | POST | `/api/general` | `{question, history, instructions, temperature, max_tokens, model}` → `{status: answered\|declined, reason, answer, model, timings}`. Orientação geral de suporte, usada pelo plugin **só** quando a KB não resolve e o administrador liberou respostas fora dela |
 | POST | `/api/test-llm` | Teste rápido do modelo local |
+| POST | `/api/external` | `{question, allowed_article_ids, history, options, provider, scope: {text, domains, web_search}, include_kb}` → `{status: answered\|declined, reason (ok, out_of_scope, llm_declined, provider_failed...), answer, sources, web_sources, provider, fallback, searched}`. Resposta dentro do escopo da empresa, com fonte externa: pesquisa ao vivo nos sites permitidos ou o conhecimento do provedor. Com `include_kb`, inclui os artigos do GLPI autorizados |
 | POST | `/api/provider-test` | `{provider}` → `{ok, error, model, duration_ms}`. Chamada curta ao provedor externo, sem queda para o modelo local |
 | POST | `/api/index` | Reindexa artigos específicos |
 | POST | `/api/sync` / `/api/reindex` | Sincronização incremental / completa em segundo plano (202) |
@@ -405,6 +406,8 @@ Todas as rotas exigem `Authorization: Bearer <AI_API_KEY>`, exceto `/api/live`.
 - o modelo pode recusar (`respondeu=false`) assuntos fora de TI;
 - citações e URLs são removidas da resposta;
 - a geração usa JSON schema, como no `/api/chat`.
+
+Mudanças do contrato 1.3 (compatível com 1.2): rota `/api/external` (escopo + fonte externa). A rota `/api/general`, que dava a orientação geral com o modelo local, continua disponível, mas o plugin 1.4 não a usa mais: sem provedor, o agente responde só pela KB.
 
 Mudanças do contrato 1.2 (compatível com 1.1): campo opcional `provider` em `/api/chat`, `/api/general` e `/api/summarize`; rota `/api/provider-test`; respostas com `provider` (quem redigiu) e `fallback` (motivo da queda para o modelo local).
 
@@ -441,6 +444,17 @@ Recursos e rede:
 - Com um provedor externo, o modelo de chat local só é carregado quando o provedor falha. O `OLLAMA_KEEP_ALIVE` o descarrega depois, e a memória em uso cai para ~1 GB (embeddings + Qdrant + ai-api).
 - Para não ter reserva, deixe `LLM_MODEL` como está e desligue a queda no plugin. O modelo continua baixado, mas não é carregado.
 - A ai-api precisa de saída HTTPS para o endereço do provedor. A rede `glpi_ai_edge` já tem; libere no firewall `api.openai.com`, `*.openai.azure.com`/`*.services.ai.azure.com` ou `api.anthropic.com`, conforme o caso.
+
+### Escopo e fonte externa (`/api/external`)
+
+- **Escopo** (`scope.text`): entra no prompt delimitado. Fora do escopo, o modelo responde `FORA_DO_ESCOPO` e a rota devolve `declined/out_of_scope`.
+- **Sites** (`scope.domains`): são normalizados (sem esquema, caminho ou `www.`) e são os únicos hosts aceitos nos links da resposta (subdomínios incluídos). Links de outros hosts são removidos, e `web_sources` só lista URLs desses sites.
+- **Pesquisa ao vivo** (`scope.web_search` + sites):
+  - OpenAI: `POST /v1/responses` com a ferramenta `web_search` e `filters.allowed_domains`. As citações vêm de `url_citation`.
+  - Anthropic: ferramenta `web_search_20260209` (ou `web_search_20250305` em modelos antigos) com `allowed_domains` e `max_uses: 3`. Retoma `pause_turn` até 3 vezes; as citações vêm dos blocos de texto.
+  - Azure e compatíveis: sem pesquisa, só o conhecimento do modelo, limitado ao escopo e aos sites.
+- **Artigos do GLPI** (`include_kb`): os trechos com evidência suficiente entram como documentos internos prioritários. Citações `[KB #id]` só valem para esses artigos.
+- **Falhas:** com `include_kb` e `fallback_local`, o modelo local responde só pela KB. Sem `include_kb`, a rota devolve `declined/provider_failed`.
 
 ## Rede e segurança
 

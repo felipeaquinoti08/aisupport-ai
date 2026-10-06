@@ -7,18 +7,21 @@ import json
 import logging
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from . import sparse
 from .config import Settings
-from .guard import RagParams, evaluate_evidence, validate_answer, validate_general
+from .guard import RagParams, evaluate_evidence, validate_answer, validate_external, validate_general
 from .logging_setup import log
 from .ollama import OllamaClient
-from .prompts import ANSWER_SCHEMA, GENERAL_SCHEMA, SUMMARY_SCHEMA, build_chat_messages, build_general_messages, build_summary_messages
+from .prompts import (
+    ANSWER_SCHEMA, GENERAL_SCHEMA, OUT_OF_SCOPE, SUMMARY_SCHEMA, UNKNOWN,
+    build_chat_messages, build_external_messages, build_general_messages, build_summary_messages,
+)
 from .errors import LlmUnavailable
 from .ollama import LlmResult
-from .providers import ExternalLLM, PiiMasker, ProviderConfig, ProviderError, mask_messages, unmask_json_text
+from .providers import ExternalLLM, PiiMasker, ProviderConfig, ProviderError, mask_messages, supports_web_search, unmask_json_text
 from .text import clean_input, tokens
 from .vectorstore import Hit, VectorStore
 
@@ -365,6 +368,93 @@ class RagService:
             "timings": timings,
             "provider": used,
             "fallback": fallback,
+        }
+
+    # --- Escopo + fonte externa (exige provedor) ----------------------------------------------
+
+    async def external(
+        self,
+        question: str,
+        provider: ProviderConfig,
+        scope: dict[str, Any],
+        allowed_ids: list[int] | None = None,
+        history: list[dict[str, str]] | None = None,
+        opts: ChatOptions | None = None,
+        include_kb: bool = False,
+    ) -> dict[str, Any]:
+        """Resposta dentro do escopo definido pela empresa, a partir dos artigos
+        do GLPI (include_kb) e/ou da fonte externa: pesquisa ao vivo nos sites
+        permitidos (OpenAI/Anthropic) ou o conhecimento do próprio modelo."""
+        t0 = time.monotonic()
+        opts = opts or ChatOptions()
+        p = self.params(opts)
+        question = clean_input(question)[: self._s.max_question_chars]
+        history = [
+            {"role": m.get("role", "user"), "content": clean_input(m.get("content", ""))[:1500]}
+            for m in (history or [])[-6:]
+        ]
+        empty = {"answer": "", "sources": [], "web_sources": [], "considered": [], "top_score": 0.0,
+                 "model": "", "provider": provider.label, "fallback": "", "searched": False}
+        if not tokens(question):
+            return {**empty, "status": "declined", "reason": "empty_query", "timings": {"total_ms": 0}}
+
+        context, considered, top = [], [], 0.0
+        if include_kb and allowed_ids:
+            query = self.retrieval_query(question, history)
+            hits = await self.retrieve(query, self._s.rag_candidates, allowed_ids)
+            decision = evaluate_evidence(question, hits, p, alt_question=query)
+            context = decision.context if decision.ok else []
+            considered, top = self._considered(hits), decision.top_score
+        t_retrieval = int((time.monotonic() - t0) * 1000)
+
+        domains = list(scope.get("domains") or [])
+        search = bool(scope.get("web_search", True)) and bool(domains) and supports_web_search(provider)
+        messages = build_external_messages(
+            question, history, [{"article_id": h.article_id, "title": h.title, "text": h.text} for h in context],
+            str(scope.get("text") or ""), domains, search, opts.instructions,
+        )
+        masker = PiiMasker() if provider.mask_pii else None
+        outgoing = mask_messages(messages, masker) if masker else messages
+        try:
+            res = await self._external.answer_text(
+                provider, outgoing, domains=domains if search else None,
+                max_tokens=8000 if provider.kind == "anthropic" else 4000,
+                temperature=_clamp(opts.temperature, 0.0, 1.0, None),
+            )
+        except ProviderError as e:
+            log(logger, logging.WARNING, "provider_failed", provider=provider.kind, model=provider.model,
+                error=e.code, status=e.status, fallback_local=provider.fallback_local, mode="external")
+            if include_kb and provider.fallback_local:
+                # Só a parte da KB pode ser feita pelo modelo local
+                local = await self.chat(question, allowed_ids or [], history, opts)
+                return {**asdict(local), "web_sources": [], "searched": False, "fallback": e.code}
+            return {**empty, "status": "declined", "reason": "provider_failed", "fallback": e.code,
+                    "considered": considered, "timings": {"retrieval_ms": t_retrieval, "total_ms": int((time.monotonic() - t0) * 1000)}}
+
+        text = masker.unmask(res.text) if masker else res.text
+        check = validate_external(text, context, domains, res.citations, OUT_OF_SCOPE, UNKNOWN)
+        timings = {"retrieval_ms": t_retrieval, "llm_ms": res.duration_ms, "total_ms": int((time.monotonic() - t0) * 1000)}
+        log(logger, logging.INFO, "external_answer_checked", ok=check.ok, reason=check.reason, provider=res.model,
+            searched=res.searched, kb=len(check.kb_ids), web=len(check.web_sources), **timings)
+        by_article = {h.article_id: h for h in context}
+        sources = []
+        for aid in check.kb_ids:
+            h = by_article[aid]
+            best = max(x.dense_score for x in context if x.article_id == aid)
+            sources.append({"article_id": aid, "title": h.title, "score": round(best, 4), "url": h.payload.get("url", "")})
+        return {
+            "status": "answered" if check.ok else "declined",
+            "reason": check.reason,
+            "answer": check.answer,
+            "sources": sources,
+            "web_sources": check.web_sources,
+            "considered": considered,
+            "top_score": top,
+            "model": res.model,
+            "provider": res.model,
+            "fallback": "",
+            "searched": res.searched,
+            "timings": timings,
         }
 
     async def test_provider(self, provider: ProviderConfig) -> dict[str, Any]:

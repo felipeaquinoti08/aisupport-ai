@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 _MAX_ID = 2**31 - 1
 
@@ -88,6 +89,41 @@ class GeneralRequest(BaseModel):
     max_tokens: int | None = Field(default=None, ge=1, le=4096)
     model: str | None = Field(default=None, max_length=120, pattern=r"^[A-Za-z0-9._:/-]+$")
     provider: ProviderIn | None = None
+
+
+class ScopeIn(BaseModel):
+    """O que o agente pode responder fora da KB do GLPI e em quais sites se basear."""
+
+    model_config = ConfigDict(extra="forbid")
+    text: str = Field(default="", max_length=1500)
+    domains: list[str] = Field(default_factory=list, max_length=20)
+    web_search: bool = True
+
+    @field_validator("domains")
+    @classmethod
+    def _domains(cls, value: list[str]) -> list[str]:
+        out = []
+        for d in value:
+            d = d.strip().lower().removeprefix("https://").removeprefix("http://").split("/")[0].removeprefix("www.")
+            if not re.fullmatch(r"(?:[a-z0-9-]+\.)+[a-z]{2,}", d):
+                raise ValueError("domínio inválido")
+            if d not in out:
+                out.append(d)
+        return out
+
+
+class ExternalRequest(BaseModel):
+    """Resposta com escopo e fonte externa (exige provedor). include_kb=True
+    combina os artigos do GLPI que o usuário pode ver; False = só fonte externa."""
+
+    model_config = ConfigDict(extra="forbid")
+    question: str = Field(min_length=1, max_length=4000)
+    allowed_article_ids: list[int] = Field(default_factory=list, max_length=200)
+    history: list[HistoryMessage] = Field(default_factory=list, max_length=12)
+    options: ChatOptionsIn = Field(default_factory=ChatOptionsIn)
+    provider: ProviderIn
+    scope: ScopeIn = Field(default_factory=ScopeIn)
+    include_kb: bool = False
 
 
 class ProviderTestRequest(BaseModel):

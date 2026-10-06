@@ -65,7 +65,7 @@ def test_full_flow_index_search_chat():
         assert r.status_code == 200 and body["status"] == "answered"
         assert body["sources"][0]["article_id"] == 10
         st = client.get("/api/status", headers=AUTH).json()
-        assert st["contract_version"] == "1.2" and st["index"]["articles"] == 2
+        assert st["contract_version"] == "1.3" and st["index"]["articles"] == 2
 
 
 def test_ollama_down_returns_503():
@@ -148,7 +148,7 @@ def test_general_endpoint_and_contract():
         assert r.status_code == 200 and r.json()["status"] == "answered"
         assert client.post("/api/general", json={"question": "x", "extra": 1}, headers=AUTH).status_code == 422
         assert client.post("/api/general", json={"question": "x"}).status_code == 401
-        assert client.get("/api/status", headers=AUTH).json()["contract_version"] == "1.2"
+        assert client.get("/api/status", headers=AUTH).json()["contract_version"] == "1.3"
         r = client.post("/api/chat", json={"question": "VPN", "allowed_article_ids": [10], "options": {"instructions": "x" * 1501}}, headers=AUTH)
         assert r.status_code == 422
 
@@ -170,3 +170,22 @@ def test_provider_fields_and_test_endpoint():
         assert bad.status_code == 422
         r = client.post("/api/chat", json={"question": "VPN", "allowed_article_ids": [10], "provider": provider}, headers=AUTH)
         assert r.status_code in (200, 503)
+
+
+def test_external_route_validates_domains():
+    from tests.test_providers import FakeExternal
+    settings = make_settings()
+    store = VectorStore(settings, client=AsyncQdrantClient(location=":memory:"))
+    ext = FakeExternal(("Abra o Microsoft Entra e redefina o MFA do usuário.", []))
+    c = build_container(settings, glpi=FakeGlpi(), ollama=FakeOllama(), store=store, external=ext)
+    client = TestClient(create_app(c, start_scheduler=False))
+    provider = {"kind": "openai", "api_key": "sk", "model": "gpt-4.1-mini"}
+    with client:
+        r = client.post("/api/external", json={"question": "MFA", "provider": provider,
+                                               "scope": {"text": "Microsoft", "domains": ["https://Learn.Microsoft.com/pt-br/", "www.support.microsoft.com"]}}, headers=AUTH)
+        assert r.status_code == 200 and r.json()["status"] == "answered"
+        assert ext.domains == ["learn.microsoft.com", "support.microsoft.com"]
+        bad = client.post("/api/external", json={"question": "MFA", "provider": provider, "scope": {"domains": ["não é domínio"]}}, headers=AUTH)
+        assert bad.status_code == 422
+        assert client.post("/api/external", json={"question": "MFA"}, headers=AUTH).status_code == 422
+        assert client.get("/api/status", headers=AUTH).json()["contract_version"] == "1.3"

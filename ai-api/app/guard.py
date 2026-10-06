@@ -228,3 +228,73 @@ def validate_general(raw: str) -> GeneralCheck:
     if len(tokens(answer)) < _MIN_ANSWER_TOKENS:
         return GeneralCheck(False, "empty_answer", "")
     return GeneralCheck(True, "ok", answer)
+
+
+def domain_allowed(url: str, domains: list[str]) -> bool:
+    host = _host(url)
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
+@dataclass
+class ExternalCheck:
+    ok: bool
+    reason: str
+    answer: str
+    kb_ids: list[int]
+    web_sources: list[dict[str, str]]
+
+
+def validate_external(
+    text: str,
+    context: list[Hit],
+    domains: list[str],
+    citations: list[dict[str, str]],
+    out_of_scope: str,
+    unknown: str,
+) -> ExternalCheck:
+    """Resposta com escopo: recusas do modelo, citações de KB só do contexto,
+    links só dos sites permitidos (ou dos artigos) e fontes da pesquisa."""
+    answer = (text or "").strip()
+    head = answer[:40].upper()
+    if out_of_scope in head:
+        return ExternalCheck(False, "out_of_scope", "", [], [])
+    if unknown in head or not answer:
+        return ExternalCheck(False, "llm_declined", "", [], [])
+
+    allowed = {h.article_id for h in context}
+    cited = list(dict.fromkeys(int(m.group(1)) for m in _CITATION.finditer(answer)))
+    kb_ids = [aid for aid in cited if aid in allowed]
+    answer = re.sub(r"[ \t]+\n", "\n", _CITATION.sub("", answer)).strip()
+
+    context_text = "\n".join(f"{h.title}\n{h.text}" for h in context)
+    folded_context = fold(context_text)
+
+    def keep_url(m: re.Match) -> str:
+        url = m.group(0).rstrip(".,;:")
+        tail = m.group(0)[len(url):]
+        if domain_allowed(url, domains) or fold(url) in folded_context:
+            return url + tail
+        return tail  # link fora dos sites permitidos: removido
+
+    answer = _URL.sub(keep_url, answer)
+    answer = re.sub(r"\(\s*\)|\[\s*\]", "", answer)
+    answer = re.sub(r"[ \t]{2,}", " ", answer).strip()
+    if len(tokens(answer)) < _MIN_ANSWER_TOKENS:
+        return ExternalCheck(False, "empty_answer", "", [], [])
+
+    if context and not kb_ids:
+        # Artigo interno usado sem citação: atribui pela sobreposição de texto
+        kb_ids = [aid for aid in attribute_sources(answer, context, []) if answer_overlap(answer, "\n".join(h.text for h in context if h.article_id == aid)) >= 0.45]
+
+    web: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for c in citations:
+        url = (c.get("url") or "").strip()
+        if url and url not in seen and domain_allowed(url, domains):
+            seen.add(url)
+            web.append({"url": url, "title": (c.get("title") or "")[:200]})
+    for url in (u.rstrip(".,;:") for u in _URL.findall(answer)):
+        if url not in seen and domain_allowed(url, domains):
+            seen.add(url)
+            web.append({"url": url, "title": ""})
+    return ExternalCheck(True, "ok", answer, kb_ids, web[:6])
